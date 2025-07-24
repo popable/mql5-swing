@@ -40,6 +40,13 @@ input color HigherLowColor = clrGreen;       // Higher Low标签颜色
 input color LowerLowColor = clrMaroon;       // Lower Low标签颜色
 input int LabelFontSize = 8;                 // 标签字体大小
 input string LabelFont = "Arial";            // 标签字体
+// --- 新增：趋势分析参数
+input bool ShowTrendAnalysis = true;         // 显示趋势分析
+input int TrendAnalysisPeriod = 4;           // 趋势分析周期（使用最近N个摆动点）
+input color UpTrendColor = clrLime;          // 上升趋势颜色
+input color DownTrendColor = clrRed;         // 下降趋势颜色
+input color RangeColor = clrYellow;          // 交易区间颜色
+input int TrendLabelFontSize = 12;           // 趋势标签字体大小
 
 //--- 指标缓冲区
 double SwingHighBuffer[];
@@ -100,6 +107,19 @@ SwingPointData secondLastLowPoint;  // 上上个低点
 string relationLabelPrefix = "SwingRelation_"; // 关系标签前缀
 int labelCounter = 0;              // 标签计数器
 
+// --- 新增：趋势分析变量
+enum TREND_STATE
+  {
+   TREND_UP,      // 上升趋势
+   TREND_DOWN,    // 下降趋势
+   TREND_RANGE    // 交易区间
+  };
+
+TREND_STATE currentTrend = TREND_RANGE;  // 当前趋势状态
+string trendLabelName = "TrendAnalysis"; // 趋势分析标签名称
+SwingPointData swingHistory[8];          // 摆动点历史记录（高点和低点混合）
+int swingHistoryCount = 0;               // 摆动点历史数量
+
 //--- 绘图属性
 #property indicator_label1 "Swing High"
 #property indicator_type1 DRAW_ARROW
@@ -139,6 +159,14 @@ int OnInit()
    InitializeSwingPointData(secondLastHighPoint);
    InitializeSwingPointData(secondLastLowPoint);
    labelCounter = 0;
+   
+   // 初始化趋势分析变量
+   currentTrend = TREND_RANGE;
+   swingHistoryCount = 0;
+   for(int i = 0; i < 8; i++)
+     {
+      InitializeSwingPointData(swingHistory[i]);
+     }
    
    return(INIT_SUCCEEDED);
   }
@@ -301,6 +329,14 @@ int OnCalculate(const int rates_total,
       InitializeSwingPointData(secondLastHighPoint);
       InitializeSwingPointData(secondLastLowPoint);
       labelCounter = 0;
+      
+      // 初始化趋势分析
+      currentTrend = TREND_RANGE;
+      swingHistoryCount = 0;
+      for(int i = 0; i < 8; i++)
+        {
+         InitializeSwingPointData(swingHistory[i]);
+        }
       
       // 重新计算有效值（防止品种切换）
       CalculateEffectiveValues();
@@ -493,6 +529,17 @@ int OnCalculate(const int rates_total,
            {
             UpdateAllHighPoints(curHigh, checkIndex);
            }
+         
+         // 添加到摆动点历史记录并进行趋势分析
+         if(!isConsecutiveHighReplacement)
+           {
+            AddToSwingHistory(curHigh, checkIndex, time[checkIndex], true);
+            if(ShowTrendAnalysis)
+              {
+               AnalyzeTrend();
+               UpdateTrendLabel();
+              }
+           }
         }
       else if(isLow)
         {
@@ -531,6 +578,17 @@ int OnCalculate(const int rates_total,
          if(!isConsecutiveLowReplacement)
            {
             UpdateAllLowPoints(curLow, checkIndex);
+           }
+         
+         // 添加到摆动点历史记录并进行趋势分析
+         if(!isConsecutiveLowReplacement)
+           {
+            AddToSwingHistory(curLow, checkIndex, time[checkIndex], false);
+            if(ShowTrendAnalysis)
+              {
+               AnalyzeTrend();
+               UpdateTrendLabel();
+              }
            }
         }
      }
@@ -1015,7 +1073,8 @@ void CleanupOldObjects()
          StringFind(objName, prevLowLineName) >= 0 ||
          StringFind(objName, highTopLineName) >= 0 ||
          StringFind(objName, lowBottomLineName) >= 0 ||
-         StringFind(objName, relationLabelPrefix) >= 0)
+         StringFind(objName, relationLabelPrefix) >= 0 ||
+         StringFind(objName, trendLabelName) >= 0)
         {
          ArrayResize(objectsToDelete, deleteCount + 1);
          objectsToDelete[deleteCount] = objName;
@@ -1834,5 +1893,177 @@ void DeleteRelationLabelsAtIndex(int barIndex)
      {
       ObjectDelete(0, labelsToDelete[i]);
       Print("删除关系标签：", labelsToDelete[i]);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 添加摆动点到历史记录                                                 |
+//+------------------------------------------------------------------+
+void AddToSwingHistory(double price, int index, datetime time, bool isHigh)
+  {
+   // 向前移位数组
+   for(int i = 7; i > 0; i--)
+     {
+      swingHistory[i] = swingHistory[i-1];
+     }
+   
+   // 添加新的摆动点到首位
+   swingHistory[0].price = price;
+   swingHistory[0].index = index;
+   swingHistory[0].time = time;
+   swingHistory[0].relation = isHigh ? "H" : "L";
+   
+   if(swingHistoryCount < 8)
+      swingHistoryCount++;
+   
+   Print("添加摆动点到历史：", (isHigh ? "高点" : "低点"), " 价格=", price, " 索引=", index, " 总数=", swingHistoryCount);
+  }
+
+//+------------------------------------------------------------------+
+//| 分析趋势                                                            |
+//+------------------------------------------------------------------+
+void AnalyzeTrend()
+  {
+   if(swingHistoryCount < TrendAnalysisPeriod)
+     {
+      currentTrend = TREND_RANGE;
+      return;
+     }
+   
+   // 分离高点和低点
+   double highs[];
+   double lows[];
+   int highCount = 0;
+   int lowCount = 0;
+   
+   for(int i = 0; i < TrendAnalysisPeriod && i < swingHistoryCount; i++)
+     {
+      if(swingHistory[i].relation == "H")
+        {
+         ArrayResize(highs, highCount + 1);
+         highs[highCount] = swingHistory[i].price;
+         highCount++;
+        }
+      else if(swingHistory[i].relation == "L")
+        {
+         ArrayResize(lows, lowCount + 1);
+         lows[lowCount] = swingHistory[i].price;
+         lowCount++;
+        }
+     }
+   
+   // 至少需要2个高点和2个低点来分析趋势
+   if(highCount < 2 || lowCount < 2)
+     {
+      currentTrend = TREND_RANGE;
+      return;
+     }
+   
+   // 分析高点趋势（最新的在数组开头）
+   bool highsRising = true;
+   bool highsFalling = true;
+   for(int i = 0; i < highCount - 1; i++)
+     {
+      if(highs[i] <= highs[i+1]) highsRising = false;
+      if(highs[i] >= highs[i+1]) highsFalling = false;
+     }
+   
+   // 分析低点趋势
+   bool lowsRising = true;
+   bool lowsFalling = true;
+   for(int i = 0; i < lowCount - 1; i++)
+     {
+      if(lows[i] <= lows[i+1]) lowsRising = false;
+      if(lows[i] >= lows[i+1]) lowsFalling = false;
+     }
+   
+   // 判断趋势
+   if(highsRising && lowsRising)
+     {
+      currentTrend = TREND_UP;
+      Print("趋势分析：上升趋势 (HH + HL)");
+     }
+   else if(highsFalling && lowsFalling)
+     {
+      currentTrend = TREND_DOWN;
+      Print("趋势分析：下降趋势 (LH + LL)");
+     }
+   else
+     {
+      currentTrend = TREND_RANGE;
+      Print("趋势分析：交易区间 (混合模式)");
+     }
+   
+   // 打印调试信息
+   string debugStr = "高点序列: ";
+   for(int i = 0; i < highCount; i++)
+     {
+      debugStr += DoubleToString(highs[i], 5) + " ";
+     }
+   Print(debugStr);
+   
+   debugStr = "低点序列: ";
+   for(int i = 0; i < lowCount; i++)
+     {
+      debugStr += DoubleToString(lows[i], 5) + " ";
+     }
+   Print(debugStr);
+  }
+
+//+------------------------------------------------------------------+
+//| 更新趋势标签                                                        |
+//+------------------------------------------------------------------+
+void UpdateTrendLabel()
+  {
+   // 删除旧的趋势标签
+   ObjectDelete(0, trendLabelName);
+   
+   // 确定标签文本和颜色
+   string trendText = "";
+   color trendColor = clrWhite;
+   
+   switch(currentTrend)
+     {
+      case TREND_UP:
+         trendText = "上升趋势 ↗";
+         trendColor = UpTrendColor;
+         break;
+      case TREND_DOWN:
+         trendText = "下降趋势 ↘";
+         trendColor = DownTrendColor;
+         break;
+      case TREND_RANGE:
+         trendText = "交易区间 ↔";
+         trendColor = RangeColor;
+         break;
+     }
+   
+   // 获取图表的右上角位置
+   long chartWidth = ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+   long chartHeight = ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+   
+   // 计算标签位置（右上角，留出边距）
+   int labelX = (int)(chartWidth - 150); // 距离右边缘150像素
+   int labelY = 30; // 距离顶部30像素
+   
+   // 创建标签
+   if(ObjectCreate(0, trendLabelName, OBJ_LABEL, 0, 0, 0))
+     {
+      ObjectSetString(0, trendLabelName, OBJPROP_TEXT, trendText);
+      ObjectSetString(0, trendLabelName, OBJPROP_FONT, LabelFont);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_FONTSIZE, TrendLabelFontSize);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_COLOR, trendColor);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_XDISTANCE, labelX);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_YDISTANCE, labelY);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_BACK, false);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, trendLabelName, OBJPROP_HIDDEN, true);
+      
+      Print("更新趋势标签：", trendText, " 位置：(", labelX, ",", labelY, ")");
+     }
+   else
+     {
+      Print("创建趋势标签失败：", trendText);
      }
   }
