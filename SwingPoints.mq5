@@ -376,55 +376,43 @@ int OnCalculate(const int rates_total,
            }
         }
       
-      // 交替检查：防止连续相同类型的波段点
+      //=================================================================
+      // 连续波段点去重处理
+      // 改进说明：
+      // 1. 将去重逻辑独立成专门的函数，代码更清晰
+      // 2. 增加详细的日志输出，便于调试和监控
+      // 3. 安全的数组更新机制，避免数据不一致
+      // 4. 明确的返回值判断，逻辑更可靠
+      //=================================================================
+      
+      // 连续高点去重：防止连续的高点
       if(isHigh && lastSwingType == 1)
         {
-         // 如果当前是高点，但上一个也是高点
-         if(curHigh > lastSwingPrice)
+         // 如果当前是高点，但上一个也是高点，进行去重处理
+         if(ProcessConsecutiveHighPoints(curHigh, checkIndex))
            {
-            // 当前高点更高，替换上一个高点
-            if(lastSwingIndex >= 0)
-               SwingHighBuffer[lastSwingIndex] = EMPTY_VALUE;
-            // 同时更新高点跟踪
-            lastHighIndex = checkIndex;
-            lastHighPrice = curHigh;
-            
-            // 需要更新扩展高点跟踪数组中的最新点
-            if(totalHighsFound > 0)
-              {
-               allRecentHighs[0] = curHigh;
-               allRecentHighsIndices[0] = checkIndex;
-              }
+            // 当前高点更优，已经替换了上一个高点
+            // 无需额外处理，保持isHigh = true
            }
          else
            {
-            // 当前高点更低，忽略当前高点
+            // 当前高点不如上一个，忽略当前高点
             isHigh = false;
            }
         }
       
+      // 连续低点去重：防止连续的低点
       if(isLow && lastSwingType == -1)
         {
-         // 如果当前是低点，但上一个也是低点
-         if(curLow < lastSwingPrice)
+         // 如果当前是低点，但上一个也是低点，进行去重处理
+         if(ProcessConsecutiveLowPoints(curLow, checkIndex))
            {
-            // 当前低点更低，替换上一个低点
-            if(lastSwingIndex >= 0)
-               SwingLowBuffer[lastSwingIndex] = EMPTY_VALUE;
-            // 同时更新低点跟踪
-            lastLowIndex = checkIndex;
-            lastLowPrice = curLow;
-            
-            // 需要更新扩展低点跟踪数组中的最新点
-            if(totalLowsFound > 0)
-              {
-               allRecentLows[0] = curLow;
-               allRecentLowsIndices[0] = checkIndex;
-              }
+            // 当前低点更优，已经替换了上一个低点
+            // 无需额外处理，保持isLow = true
            }
          else
            {
-            // 当前低点更高，忽略当前低点
+            // 当前低点不如上一个，忽略当前低点
             isLow = false;
            }
         }
@@ -434,9 +422,16 @@ int OnCalculate(const int rates_total,
         {
          SwingHighBuffer[checkIndex] = curHigh + effectiveArrowGap;
          
-         // 更新波段点信息
-         secondLastSwingIndex = lastSwingIndex;
-         secondLastSwingPrice = lastSwingPrice;
+         // 检查是否是连续高点替换模式
+         bool isConsecutiveHighReplacement = (lastSwingType == 1);
+         
+         // 更新波段点信息（只有在非替换模式下才更新secondLast）
+         if(!isConsecutiveHighReplacement)
+           {
+            secondLastSwingIndex = lastSwingIndex;
+            secondLastSwingPrice = lastSwingPrice;
+           }
+         
          lastSwingType = 1;
          lastSwingIndex = checkIndex;
          lastSwingPrice = curHigh;
@@ -449,16 +444,26 @@ int OnCalculate(const int rates_total,
          // 更新前期高点跟踪
          UpdatePrevHighPoints(curHigh);
          
-         // 只有在实际显示箭头时才更新扩展高点跟踪
-         UpdateAllHighPoints(curHigh, checkIndex);
+         // 只有在非替换模式下才添加到扩展高点跟踪数组
+         if(!isConsecutiveHighReplacement)
+           {
+            UpdateAllHighPoints(curHigh, checkIndex);
+           }
         }
       else if(isLow)
         {
          SwingLowBuffer[checkIndex] = curLow - effectiveArrowGap;
          
-         // 更新波段点信息
-         secondLastSwingIndex = lastSwingIndex;
-         secondLastSwingPrice = lastSwingPrice;
+         // 检查是否是连续低点替换模式
+         bool isConsecutiveLowReplacement = (lastSwingType == -1);
+         
+         // 更新波段点信息（只有在非替换模式下才更新secondLast）
+         if(!isConsecutiveLowReplacement)
+           {
+            secondLastSwingIndex = lastSwingIndex;
+            secondLastSwingPrice = lastSwingPrice;
+           }
+         
          lastSwingType = -1;
          lastSwingIndex = checkIndex;
          lastSwingPrice = curLow;
@@ -471,8 +476,11 @@ int OnCalculate(const int rates_total,
          // 更新前期低点跟踪
          UpdatePrevLowPoints(curLow);
          
-         // 只有在实际显示箭头时才更新扩展低点跟踪
-         UpdateAllLowPoints(curLow, checkIndex);
+         // 只有在非替换模式下才添加到扩展低点跟踪数组
+         if(!isConsecutiveLowReplacement)
+           {
+            UpdateAllLowPoints(curLow, checkIndex);
+           }
         }
      }
 
@@ -1489,6 +1497,92 @@ void CleanupInvalidLowPoints()
         }
       
       totalLowsFound = validCount;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 处理连续高点去重                                                    |
+//| 功能: 当检测到连续的高点时，比较它们的优劣并保留更优的那个              |
+//| 参数: currentHigh - 当前检测到的高点价格                            |
+//|       currentIndex - 当前高点的K线索引                             |
+//| 返回: true = 当前高点更优，已替换上一个； false = 上一个更优，忽略当前  |
+//| 改进: 1. 逻辑更清晰，单独处理去重                                   |
+//|       2. 详细的日志输出，便于调试                                   |
+//|       3. 安全的数组更新，避免索引错误                               |
+//+------------------------------------------------------------------+
+bool ProcessConsecutiveHighPoints(double currentHigh, int currentIndex)
+  {
+   // 检查当前高点是否比上一个高点更高
+   if(currentHigh > lastSwingPrice)
+     {
+      // 当前高点更高，替换上一个高点
+      Print("连续高点去重：当前高点", currentHigh, "[", currentIndex, "] 高于上一个", lastSwingPrice, "[", lastSwingIndex, "]，替换上一个");
+      
+      // 清除上一个高点的箭头
+      if(lastSwingIndex >= 0)
+        {
+         SwingHighBuffer[lastSwingIndex] = EMPTY_VALUE;
+        }
+      
+      // 更新扩展高点跟踪数组中的最新点（如果存在）
+      if(totalHighsFound > 0)
+        {
+         // 替换数组中最新的高点数据
+         allRecentHighs[0] = currentHigh;
+         allRecentHighsIndices[0] = currentIndex;
+         Print("更新扩展高点数组：替换最新高点为", currentHigh, "@", currentIndex);
+        }
+      
+      return true; // 当前高点更优
+     }
+   else
+     {
+      // 上一个高点更高，保留上一个，忽略当前
+      Print("连续高点去重：当前高点", currentHigh, "[", currentIndex, "] 低于上一个", lastSwingPrice, "[", lastSwingIndex, "]，忽略当前");
+      return false; // 上一个更优
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 处理连续低点去重                                                    |
+//| 功能: 当检测到连续的低点时，比较它们的优劣并保留更优的那个              |
+//| 参数: currentLow - 当前检测到的低点价格                             |
+//|       currentIndex - 当前低点的K线索引                             |
+//| 返回: true = 当前低点更优，已替换上一个； false = 上一个更优，忽略当前  |
+//| 改进: 1. 逻辑更清晰，单独处理去重                                   |
+//|       2. 详细的日志输出，便于调试                                   |
+//|       3. 安全的数组更新，避免索引错误                               |
+//+------------------------------------------------------------------+
+bool ProcessConsecutiveLowPoints(double currentLow, int currentIndex)
+  {
+   // 检查当前低点是否比上一个低点更低
+   if(currentLow < lastSwingPrice)
+     {
+      // 当前低点更低，替换上一个低点
+      Print("连续低点去重：当前低点", currentLow, "[", currentIndex, "] 低于上一个", lastSwingPrice, "[", lastSwingIndex, "]，替换上一个");
+      
+      // 清除上一个低点的箭头
+      if(lastSwingIndex >= 0)
+        {
+         SwingLowBuffer[lastSwingIndex] = EMPTY_VALUE;
+        }
+      
+      // 更新扩展低点跟踪数组中的最新点（如果存在）
+      if(totalLowsFound > 0)
+        {
+         // 替换数组中最新的低点数据
+         allRecentLows[0] = currentLow;
+         allRecentLowsIndices[0] = currentIndex;
+         Print("更新扩展低点数组：替换最新低点为", currentLow, "@", currentIndex);
+        }
+      
+      return true; // 当前低点更优
+     }
+   else
+     {
+      // 上一个低点更低，保留上一个，忽略当前
+      Print("连续低点去重：当前低点", currentLow, "[", currentIndex, "] 高于上一个", lastSwingPrice, "[", lastSwingIndex, "]，忽略当前");
+      return false; // 上一个更优
      }
   }
 //+------------------------------------------------------------------+
