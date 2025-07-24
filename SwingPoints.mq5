@@ -1291,15 +1291,15 @@ void DrawTopBottomLines(const datetime &time[])
         }
      }
    
-   // 绘制低点底部射线（连接倒数第2和倒数第3个有箭头的低点）
+   // 绘制低点底部射线（连接倒数第3和倒数第2个有箭头的低点，跳过最新的低点）
    if(ShowLowBottomLine && totalLowsFound >= 3)
      {
-      // 查找倒数第2个和倒数第3个真正有箭头的低点
+      // 查找倒数第3个和倒数第2个真正有箭头的低点（跳过最新的，即索引0）
       int validLowIndices[2];
       double validLowPrices[2];
       int validCount = 0;
       
-      // 从数组中查找有效的低点（跳过索引0，因为那是最新的）
+      // 从数组中查找有效的低点（跳过索引0，因为那是最新的低点）
       for(int i = 1; i < totalLowsFound && validCount < 2; i++)
         {
          int index = allRecentLowsIndices[i];
@@ -1314,13 +1314,17 @@ void DrawTopBottomLines(const datetime &time[])
       // 确保找到了至少2个有效的低点
       if(validCount >= 2)
         {
-         int index2 = validLowIndices[0]; // 倒数第2个有效低点
-         int index3 = validLowIndices[1]; // 倒数第3个有效低点
+         int index2 = validLowIndices[0]; // 倒数第2个有效低点（数组中索引1）
+         int index3 = validLowIndices[1]; // 倒数第3个有效低点（数组中索引2）
          double price2 = validLowPrices[0];
          double price3 = validLowPrices[1];
          
          datetime time2 = time[index2];
          datetime time3 = time[index3];
+         
+         // 打印调试信息显示连接的具体低点
+         Print("低点底部射线连接：倒数第3个低点[", index3, "] ", price3, " -> 倒数第2个低点[", index2, "] ", price2);
+         Print("当前低点数组状态 - 总数:", totalLowsFound, ", 最新(索引0):[", allRecentLowsIndices[0], "] ", allRecentLows[0]);
          
          // 确保索引不同
          if(index2 != index3)
@@ -1337,7 +1341,7 @@ void DrawTopBottomLines(const datetime &time[])
                   ObjectSetInteger(0, lowBottomLineName, OBJPROP_RAY_LEFT, false);
                   ObjectSetInteger(0, lowBottomLineName, OBJPROP_BACK, false);
                   
-                  Print("创建低点底部射线：从[", index3, "] ", price3, " 到[", index2, "] ", price2, " (找到", validCount, "个有效低点)");
+                  Print("成功创建低点底部射线：从倒数第3个[", index3, "] ", price3, " 到倒数第2个[", index2, "] ", price2);
                  }
               }
             else
@@ -1347,12 +1351,14 @@ void DrawTopBottomLines(const datetime &time[])
                ObjectSetDouble(0, lowBottomLineName, OBJPROP_PRICE, 0, price3);
                ObjectSetInteger(0, lowBottomLineName, OBJPROP_TIME, 1, time2);
                ObjectSetDouble(0, lowBottomLineName, OBJPROP_PRICE, 1, price2);
+               
+               Print("成功更新低点底部射线：从倒数第3个[", index3, "] ", price3, " 到倒数第2个[", index2, "] ", price2);
               }
            }
         }
       else
         {
-         Print("低点底部射线跳过：只找到", validCount, "个有效低点，需要至少2个");
+         Print("低点底部射线跳过：只找到", validCount, "个有效低点（跳过最新），需要至少2个");
         }
      }
   }
