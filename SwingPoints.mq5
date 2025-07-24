@@ -465,7 +465,19 @@ int OnCalculate(const int rates_total,
          if(ProcessConsecutiveHighPoints(curHigh, checkIndex))
            {
             // 当前高点更优，已经替换了上一个高点
-            // 无需额外处理，保持isHigh = true
+            // 更新摆动点历史记录中的最新高点并重新分析趋势
+            if(swingHistoryCount > 0 && swingHistory[0].relation == "H")
+              {
+               swingHistory[0].price = curHigh;
+               swingHistory[0].index = checkIndex;
+               swingHistory[0].time = time[checkIndex];
+               
+               if(ShowTrendAnalysis)
+                 {
+                  AnalyzeTrend();
+                  UpdateTrendLabel();
+                 }
+              }
            }
          else
            {
@@ -481,7 +493,19 @@ int OnCalculate(const int rates_total,
          if(ProcessConsecutiveLowPoints(curLow, checkIndex))
            {
             // 当前低点更优，已经替换了上一个低点
-            // 无需额外处理，保持isLow = true
+            // 更新摆动点历史记录中的最新低点并重新分析趋势
+            if(swingHistoryCount > 0 && swingHistory[0].relation == "L")
+              {
+               swingHistory[0].price = curLow;
+               swingHistory[0].index = checkIndex;
+               swingHistory[0].time = time[checkIndex];
+               
+               if(ShowTrendAnalysis)
+                 {
+                  AnalyzeTrend();
+                  UpdateTrendLabel();
+                 }
+              }
            }
          else
            {
@@ -1927,10 +1951,11 @@ void AnalyzeTrend()
    if(swingHistoryCount < TrendAnalysisPeriod)
      {
       currentTrend = TREND_RANGE;
+      Print("趋势分析：摆动点数量不足，当前=", swingHistoryCount, ", 需要=", TrendAnalysisPeriod);
       return;
      }
    
-   // 分离高点和低点
+   // 分离高点和低点，保持时间顺序（最新的在前）
    double highs[];
    double lows[];
    int highCount = 0;
@@ -1956,16 +1981,18 @@ void AnalyzeTrend()
    if(highCount < 2 || lowCount < 2)
      {
       currentTrend = TREND_RANGE;
+      Print("趋势分析：高低点数量不足 - 高点=", highCount, ", 低点=", lowCount, " (各需要>=2)");
       return;
      }
    
-   // 分析高点趋势（最新的在数组开头）
+   // 分析高点趋势（最新的在数组开头，索引0是最新的）
    bool highsRising = true;
    bool highsFalling = true;
    for(int i = 0; i < highCount - 1; i++)
      {
-      if(highs[i] <= highs[i+1]) highsRising = false;
-      if(highs[i] >= highs[i+1]) highsFalling = false;
+      // 比较：更新的价格 vs 更老的价格
+      if(highs[i] <= highs[i+1]) highsRising = false;  // 如果新高点不高于老高点，则不是上升
+      if(highs[i] >= highs[i+1]) highsFalling = false; // 如果新高点不低于老高点，则不是下降
      }
    
    // 分析低点趋势
@@ -1973,39 +2000,42 @@ void AnalyzeTrend()
    bool lowsFalling = true;
    for(int i = 0; i < lowCount - 1; i++)
      {
-      if(lows[i] <= lows[i+1]) lowsRising = false;
-      if(lows[i] >= lows[i+1]) lowsFalling = false;
+      // 比较：更新的价格 vs 更老的价格
+      if(lows[i] <= lows[i+1]) lowsRising = false;   // 如果新低点不高于老低点，则不是上升
+      if(lows[i] >= lows[i+1]) lowsFalling = false;  // 如果新低点不低于老低点，则不是下降
      }
    
    // 判断趋势
    if(highsRising && lowsRising)
      {
       currentTrend = TREND_UP;
-      Print("趋势分析：上升趋势 (HH + HL)");
+      Print("趋势分析：上升趋势 (HH + HL) - 高点上升:", highsRising, ", 低点上升:", lowsRising);
      }
    else if(highsFalling && lowsFalling)
      {
       currentTrend = TREND_DOWN;
-      Print("趋势分析：下降趋势 (LH + LL)");
+      Print("趋势分析：下降趋势 (LH + LL) - 高点下降:", highsFalling, ", 低点下降:", lowsFalling);
      }
    else
      {
       currentTrend = TREND_RANGE;
-      Print("趋势分析：交易区间 (混合模式)");
+      Print("趋势分析：交易区间 (混合模式) - 高点上升:", highsRising, ", 高点下降:", highsFalling, ", 低点上升:", lowsRising, ", 低点下降:", lowsFalling);
      }
    
-   // 打印调试信息
-   string debugStr = "高点序列: ";
+   // 打印详细调试信息
+   string debugStr = "最近" + IntegerToString(highCount) + "个高点序列(新->老): ";
    for(int i = 0; i < highCount; i++)
      {
-      debugStr += DoubleToString(highs[i], 5) + " ";
+      debugStr += DoubleToString(highs[i], 5);
+      if(i < highCount - 1) debugStr += " -> ";
      }
    Print(debugStr);
    
-   debugStr = "低点序列: ";
+   debugStr = "最近" + IntegerToString(lowCount) + "个低点序列(新->老): ";
    for(int i = 0; i < lowCount; i++)
      {
-      debugStr += DoubleToString(lows[i], 5) + " ";
+      debugStr += DoubleToString(lows[i], 5);
+      if(i < lowCount - 1) debugStr += " -> ";
      }
    Print(debugStr);
   }
@@ -2025,26 +2055,32 @@ void UpdateTrendLabel()
    switch(currentTrend)
      {
       case TREND_UP:
-         trendText = "上升趋势 ↗";
+         trendText = "趋势：上升 ↗";
          trendColor = UpTrendColor;
          break;
       case TREND_DOWN:
-         trendText = "下降趋势 ↘";
+         trendText = "趋势：下降 ↘";
          trendColor = DownTrendColor;
          break;
       case TREND_RANGE:
-         trendText = "交易区间 ↔";
+         trendText = "趋势：区间 ↔";
          trendColor = RangeColor;
          break;
      }
+   
+   // 添加摆动点数量信息
+   trendText += " (" + IntegerToString(swingHistoryCount) + "点)";
    
    // 获取图表的右上角位置
    long chartWidth = ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
    long chartHeight = ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
    
    // 计算标签位置（右上角，留出边距）
-   int labelX = (int)(chartWidth - 150); // 距离右边缘150像素
+   int labelX = (int)(chartWidth - 200); // 距离右边缘200像素，为更长的文本留出空间
    int labelY = 30; // 距离顶部30像素
+   
+   // 确保标签位置不会超出屏幕边界
+   if(labelX < 10) labelX = 10;
    
    // 创建标签
    if(ObjectCreate(0, trendLabelName, OBJ_LABEL, 0, 0, 0))
