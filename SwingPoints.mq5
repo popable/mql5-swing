@@ -31,6 +31,11 @@ int lastSwingIndex = -1;  // 最后一个波段点的索引
 double lastSwingPrice = 0; // 最后一个波段点的价格
 int secondLastSwingIndex = -1; // 倒数第二个波段点的索引
 double secondLastSwingPrice = 0; // 倒数第二个波段点的价格
+// 分别跟踪最后的高点和低点，用于斐波那契绘制
+int lastHighIndex = -1;   // 最后一个高点的索引
+double lastHighPrice = 0; // 最后一个高点的价格
+int lastLowIndex = -1;    // 最后一个低点的索引
+double lastLowPrice = 0;  // 最后一个低点的价格
 string trendLineName = "SwingTrendLine";
 string fibLevelName = "SwingFibLevel";
 int trendLineCounter = 0;  // 趋势线计数器
@@ -205,6 +210,10 @@ int OnCalculate(const int rates_total,
       lastSwingPrice = 0;
       secondLastSwingIndex = -1;
       secondLastSwingPrice = 0;
+      lastHighIndex = -1;
+      lastHighPrice = 0;
+      lastLowIndex = -1;
+      lastLowPrice = 0;
       trendLineCounter = 0;
       fibLevelCounter = 0;
       lastCreatedTrendLine = "";
@@ -329,6 +338,9 @@ int OnCalculate(const int rates_total,
             // 当前高点更高，替换上一个高点
             if(lastSwingIndex >= 0)
                SwingHighBuffer[lastSwingIndex] = EMPTY_VALUE;
+            // 同时更新高点跟踪
+            lastHighIndex = checkIndex;
+            lastHighPrice = curHigh;
            }
          else
            {
@@ -345,6 +357,9 @@ int OnCalculate(const int rates_total,
             // 当前低点更低，替换上一个低点
             if(lastSwingIndex >= 0)
                SwingLowBuffer[lastSwingIndex] = EMPTY_VALUE;
+            // 同时更新低点跟踪
+            lastLowIndex = checkIndex;
+            lastLowPrice = curLow;
            }
          else
            {
@@ -365,7 +380,11 @@ int OnCalculate(const int rates_total,
          lastSwingIndex = checkIndex;
          lastSwingPrice = curHigh;
          
-         // 绘制趋势线和工具
+         // 更新最后的高点信息
+         lastHighIndex = checkIndex;
+         lastHighPrice = curHigh;
+         
+         // 绘制趋势线和工具 - 斐波那契需要一个高点和一个低点
          if(secondLastSwingIndex >= 0)
            {
             DrawTradingTools(checkIndex, curHigh, secondLastSwingIndex, secondLastSwingPrice, true, time);
@@ -382,7 +401,11 @@ int OnCalculate(const int rates_total,
          lastSwingIndex = checkIndex;
          lastSwingPrice = curLow;
          
-         // 绘制趋势线和工具
+         // 更新最后的低点信息
+         lastLowIndex = checkIndex;
+         lastLowPrice = curLow;
+         
+         // 绘制趋势线和工具 - 斐波那契需要一个高点和一个低点
          if(secondLastSwingIndex >= 0)
            {
             DrawTradingTools(checkIndex, curLow, secondLastSwingIndex, secondLastSwingPrice, false, time);
@@ -478,14 +501,40 @@ void FindRecentSwingPoints(int startIndex, int endIndex, const double &high[], c
       lastSwingType = foundTypes[0];
       lastSwingPrice = foundPrices[0];
       
+      // 初始化高点和低点跟踪
+      if(foundTypes[0] == 1) // 最后一个是高点
+        {
+         lastHighIndex = foundIndices[0];
+         lastHighPrice = foundPrices[0];
+        }
+      else // 最后一个是低点
+        {
+         lastLowIndex = foundIndices[0];
+         lastLowPrice = foundPrices[0];
+        }
+      
       if(foundCount >= 2)
         {
          secondLastSwingIndex = foundIndices[1];
          secondLastSwingPrice = foundPrices[1];
+         
+         // 设置另一个类型的点
+         if(foundTypes[1] == 1) // 倒数第二个是高点
+           {
+            lastHighIndex = foundIndices[1];
+            lastHighPrice = foundPrices[1];
+           }
+         else // 倒数第二个是低点
+           {
+            lastLowIndex = foundIndices[1];
+            lastLowPrice = foundPrices[1];
+           }
         }
       
       Print("找到最近波段点 - 最后: 索引", lastSwingIndex, ", 类型", lastSwingType, ", 价格", lastSwingPrice,
             foundCount >= 2 ? StringFormat(", 倒数第二: 索引%d, 价格%.5f", secondLastSwingIndex, secondLastSwingPrice) : "");
+      Print("高点跟踪: 索引", lastHighIndex, ", 价格", lastHighPrice);
+      Print("低点跟踪: 索引", lastLowIndex, ", 价格", lastLowPrice);
      }
    else
      {
@@ -542,10 +591,10 @@ void DrawTradingTools(int currentIndex, double currentPrice, int lastIndex, doub
       CheckBreakout(currentIndex, currentPrice, lastIndex, lastPrice, isHigh);
      }
    
-   // 绘制斐波那契回调
+   // 绘制斐波那契回调 - 确保使用一个高点和一个低点
    if(ShowFibonacci)
      {
-      DrawFibonacci(currentIndex, currentPrice, lastIndex, lastPrice, isHigh, time);
+      DrawFibonacci(time);
      }
   }
 
@@ -600,18 +649,23 @@ double CalculateTrendLinePrice(int x1, double y1, int x2, double y2, int targetI
 //+------------------------------------------------------------------+
 //| 绘制斐波那契回调                                                    |
 //+------------------------------------------------------------------+
-void DrawFibonacci(int currentIndex, double currentPrice, int lastIndex, double lastPrice, bool isHigh, const datetime &time[])
+void DrawFibonacci(const datetime &time[])
   {
-   // 使用波段点索引作为唯一标识符
-   string fibName = fibLevelName + "_" + IntegerToString(lastIndex) + "_" + IntegerToString(currentIndex);
+   // 确保我们有一个高点和一个低点
+   if(lastHighIndex < 0 || lastLowIndex < 0)
+      return;
    
-   datetime currentTime = time[currentIndex];
-   datetime lastTime = time[lastIndex];
+   // 使用最后的高点和低点索引作为唯一标识符
+   string fibName = fibLevelName + "_" + IntegerToString(lastHighIndex) + "_" + IntegerToString(lastLowIndex);
+   
+   datetime highTime = time[lastHighIndex];
+   datetime lowTime = time[lastLowIndex];
    
    // 检查对象是否已存在，避免重复创建
    if(ObjectFind(0, fibName) < 0)
      {
-      if(ObjectCreate(0, fibName, OBJ_FIBO, 0, currentTime, currentPrice, lastTime, lastPrice))
+      // 斐波那契回调线从高点到低点绘制
+      if(ObjectCreate(0, fibName, OBJ_FIBO, 0, highTime, lastHighPrice, lowTime, lastLowPrice))
         {
          ObjectSetInteger(0, fibName, OBJPROP_COLOR, clrGoldenrod);
          ObjectSetInteger(0, fibName, OBJPROP_STYLE, STYLE_DOT);
@@ -622,9 +676,9 @@ void DrawFibonacci(int currentIndex, double currentPrice, int lastIndex, double 
          // 设置斐波那契水平数量
          ObjectSetInteger(0, fibName, OBJPROP_LEVELS, 5);
          
-         // 批量设置斐波那契水平：显示0, 0.5, 1, 1.5, 2
-         double levels[5] = {0.0, 0.5, 1.0, 1.5, 2.0};
-         string texts[5] = {"0%", "50%", "100%", "150%", "200%"};
+         // 批量设置斐波那契水平：显示0, 0.236, 0.382, 0.618, 1.0
+         double levels[5] = {0.0, 0.236, 0.382, 0.618, 1.0};
+         string texts[5] = {"0% (High)", "23.6%", "38.2%", "61.8%", "100% (Low)"};
          
          for(int i = 0; i < 5; i++)
            {
@@ -650,6 +704,8 @@ void DrawFibonacci(int currentIndex, double currentPrice, int lastIndex, double 
            {
             CleanupOldFibLevels();
            }
+           
+         Print("绘制斐波那契回调：高点[", lastHighIndex, "] ", lastHighPrice, " -> 低点[", lastLowIndex, "] ", lastLowPrice);
         }
      }
   }
