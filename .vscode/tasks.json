@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "编译 SwingPoints 指标",
+			"type": "shell",
+			"command": "echo '正在检查 SwingPoints.mq5 文件...' && ls -la SwingPoints.mq5 && echo '文件检查完成。请在 MetaTrader 5 中编译该文件。'",
+			"group": "build",
+			"isBackground": false
+		}
+	]
+}

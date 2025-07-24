@@ -1,6 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                             SwingPoints.mq5      |
 //|                        Copyright 2025, popable                  |
+//|                        快速高低点检测指标                          |
+//|                        支持快速模式和确认模式                      |
 //+------------------------------------------------------------------+
 #property indicator_chart_window
 #property indicator_buffers 2
@@ -9,7 +11,9 @@
 //--- 输入参数
 input int SwingPeriod = 3;     // 波段周期
 input int ArrowGap = 60;       // 箭头与K线的间隔距离(点数)
-input bool ShowOnlyConfirmed = true; // 只显示确认的波段点
+input bool ShowOnlyConfirmed = false; // 只显示确认的波段点（false=快速模式，true=确认模式）
+input int ConfirmationBars = 1; // 确认K线数量（仅在确认模式下生效）
+input bool UltraFastMode = false; // 超快速模式（实时检测，可能产生假信号）
 input int MinPriceMove = 0;    // 最小价格变动(点数,0=禁用)
 input bool ShowTrendLines = true;  // 显示趋势线
 input bool ShowBreakoutAlerts = true; // 显示突破提醒
@@ -168,6 +172,12 @@ int OnInit()
       InitializeSwingPointData(swingHistory[i]);
      }
    
+   // 在快速模式下启动定时器以确保实时更新
+   if(!ShowOnlyConfirmed || UltraFastMode)
+     {
+      EventSetTimer(1); // 每秒检查一次
+     }
+   
    return(INIT_SUCCEEDED);
   }
 
@@ -213,6 +223,9 @@ void CalculateEffectiveValues()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   // 停止定时器
+   EventKillTimer();
+   
    // 清理所有绘制的对象
    CleanupOldObjects();
    
@@ -238,6 +251,19 @@ void OnDeinit(const int reason)
          break;
      }
   }
+
+//+------------------------------------------------------------------+
+//| Timer function                                                   |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   // 在快速模式下，定期触发图表重绘以确保实时更新
+   if(!ShowOnlyConfirmed || UltraFastMode)
+     {
+      ChartRedraw(0);
+     }
+  }
+
 //+------------------------------------------------------------------+
 //| Custom indicator iteration function                              |
 //+------------------------------------------------------------------+
@@ -264,7 +290,11 @@ int OnCalculate(const int rates_total,
       // 完全重新计算：从最大计算K线数开始，但不超过数据总量
       int maxStart = MathMax(0, rates_total - MaxBarsToCalculate);
       effectiveStart = MathMax(maxStart, SwingPeriod * 2);
-      limit = MathMin(rates_total - SwingPeriod, rates_total);
+      // 修复：确保能处理到最新的K线
+      if(UltraFastMode)
+         limit = rates_total; // 超快速模式处理到当前K线
+      else
+         limit = rates_total - 1; // 其他模式处理到前一根完整K线
       
       // 清空指定范围内的缓冲区
       for(int i = effectiveStart; i < rates_total; i++)
@@ -279,14 +309,28 @@ int OnCalculate(const int rates_total,
      {
       // 增量计算：只计算新的K线，但限制在最大范围内
       int maxStart = MathMax(0, rates_total - MaxBarsToCalculate);
-      effectiveStart = MathMax(maxStart, prev_calculated - 1);
-      limit = MathMin(rates_total - SwingPeriod, rates_total);
+      effectiveStart = MathMax(maxStart, prev_calculated - 2); // 向前多检查一根K线
+      // 修复：确保能处理到最新的K线
+      if(UltraFastMode)
+         limit = rates_total; // 超快速模式处理到当前K线
+      else
+         limit = rates_total - 1; // 其他模式处理到前一根完整K线
       
-      // 如果需要，清理超出范围的旧数据
-      for(int i = 0; i < maxStart && i < rates_total; i++)
+      // 如果需要，清理超出范围的旧数据，但不要清理即将计算的范围
+      for(int i = 0; i < maxStart && i < effectiveStart; i++)
         {
          SwingHighBuffer[i] = EMPTY_VALUE;
          SwingLowBuffer[i] = EMPTY_VALUE;
+        }
+        
+      // 只清空最近几根K线的缓冲区，以便重新计算
+      for(int i = MathMax(0, prev_calculated - 3); i < rates_total; i++)
+        {
+         if(i >= effectiveStart)
+           {
+            SwingHighBuffer[i] = EMPTY_VALUE;
+            SwingLowBuffer[i] = EMPTY_VALUE;
+           }
         }
      }
    
@@ -361,28 +405,76 @@ int OnCalculate(const int rates_total,
       
       processedBars++;
       
-      // 检查 SwingPeriod 根K线之前的位置作为候选点
-      int checkIndex = i - SwingPeriod;
+      // 根据模式决定检查位置
+      int checkIndex;
+      if(ShowOnlyConfirmed)
+        {
+         // 确认模式：检查 ConfirmationBars 根K线之前的位置作为候选点
+         checkIndex = i - ConfirmationBars;
+         if(checkIndex < SwingPeriod)
+            continue;
+        }
+      else if(UltraFastMode)
+        {
+         // 超快速模式：检查当前K线（实时模式）
+         checkIndex = i;
+         if(checkIndex < SwingPeriod)
+            continue;
+        }
+      else
+        {
+         // 快速模式：检查前一根完整的K线
+         checkIndex = i - 1;
+         if(checkIndex < SwingPeriod)
+            continue;
+        }
       
       bool isHigh = true;
       bool isLow = true;
       double curHigh = high[checkIndex];
       double curLow = low[checkIndex];
 
-      // 只检查历史数据：左右各SwingPeriod根K线
+      // 检查左右各SwingPeriod根K线，根据模式调整右侧检查范围
       for(int j = 1; j <= SwingPeriod; j++)
         {
          // 检查左边的历史数据
-         if(high[checkIndex - j] >= curHigh)
-            isHigh = false;
-         if(low[checkIndex - j] <= curLow)
-            isLow = false;
+         if(checkIndex - j >= 0)
+           {
+            if(high[checkIndex - j] >= curHigh)
+               isHigh = false;
+            if(low[checkIndex - j] <= curLow)
+               isLow = false;
+           }
             
-         // 检查右边的历史数据（现在都是历史数据了）
-         if(high[checkIndex + j] >= curHigh)
-            isHigh = false;
-         if(low[checkIndex + j] <= curLow)
-            isLow = false;
+         // 检查右边的数据
+         if(ShowOnlyConfirmed)
+           {
+            // 确认模式：检查右边的历史数据
+            if(checkIndex + j < rates_total)
+              {
+               if(high[checkIndex + j] >= curHigh)
+                  isHigh = false;
+               if(low[checkIndex + j] <= curLow)
+                  isLow = false;
+              }
+           }
+         else if(UltraFastMode)
+           {
+            // 超快速模式：只检查左侧历史数据，不等待右侧确认
+            // 这样可以实现最快的响应，但可能产生假信号
+            }
+         else
+           {
+            // 快速模式：减少右侧检查范围
+            int rightCheckLimit = MathMin(j, i - checkIndex - 1);
+            if(rightCheckLimit > 0 && checkIndex + rightCheckLimit < rates_total)
+              {
+               if(high[checkIndex + rightCheckLimit] >= curHigh)
+                  isHigh = false;
+               if(low[checkIndex + rightCheckLimit] <= curLow)
+                  isLow = false;
+              }
+           }
         }
 
       // 可选的最小价格变动过滤
@@ -393,8 +485,25 @@ int OnCalculate(const int rates_total,
             double minHighAround = curHigh;
             for(int j = 1; j <= SwingPeriod; j++)
               {
-               if(high[checkIndex - j] < minHighAround) minHighAround = high[checkIndex - j];
-               if(high[checkIndex + j] < minHighAround) minHighAround = high[checkIndex + j];
+               if(checkIndex - j >= 0 && high[checkIndex - j] < minHighAround) 
+                  minHighAround = high[checkIndex - j];
+               
+               if(ShowOnlyConfirmed)
+                 {
+                  if(checkIndex + j < rates_total && high[checkIndex + j] < minHighAround) 
+                     minHighAround = high[checkIndex + j];
+                 }
+               else if(UltraFastMode)
+                 {
+                  // 超快速模式：只使用左侧数据
+                  }
+               else
+                 {
+                  int rightCheckLimit = MathMin(j, i - checkIndex - 1);
+                  if(rightCheckLimit > 0 && checkIndex + rightCheckLimit < rates_total && 
+                     high[checkIndex + rightCheckLimit] < minHighAround)
+                     minHighAround = high[checkIndex + rightCheckLimit];
+                 }
               }
             if((curHigh - minHighAround) < effectiveMinPriceMove)
                isHigh = false;
@@ -405,8 +514,25 @@ int OnCalculate(const int rates_total,
             double maxLowAround = curLow;
             for(int j = 1; j <= SwingPeriod; j++)
               {
-               if(low[checkIndex - j] > maxLowAround) maxLowAround = low[checkIndex - j];
-               if(low[checkIndex + j] > maxLowAround) maxLowAround = low[checkIndex + j];
+               if(checkIndex - j >= 0 && low[checkIndex - j] > maxLowAround) 
+                  maxLowAround = low[checkIndex - j];
+               
+               if(ShowOnlyConfirmed)
+                 {
+                  if(checkIndex + j < rates_total && low[checkIndex + j] > maxLowAround) 
+                     maxLowAround = low[checkIndex + j];
+                 }
+               else if(UltraFastMode)
+                 {
+                  // 超快速模式：只使用左侧数据
+                  }
+               else
+                 {
+                  int rightCheckLimit = MathMin(j, i - checkIndex - 1);
+                  if(rightCheckLimit > 0 && checkIndex + rightCheckLimit < rates_total && 
+                     low[checkIndex + rightCheckLimit] > maxLowAround)
+                     maxLowAround = low[checkIndex + rightCheckLimit];
+                 }
               }
             if((maxLowAround - curLow) < effectiveMinPriceMove)
                isLow = false;
@@ -625,10 +751,16 @@ int OnCalculate(const int rates_total,
      }
 
    // 在所有波段点计算完成后，统一绘制趋势线和斐波那契回调
-   // 只在有新波段点或者性能优化关闭时才重绘
-   if((newSwingPointFound || !OptimizeDrawing) && lastSwingIndex >= 0 && secondLastSwingIndex >= 0)
+   // 修复：确保实时更新显示
+   if(newSwingPointFound && lastSwingIndex >= 0 && secondLastSwingIndex >= 0)
      {
       DrawTradingTools(lastSwingIndex, lastSwingPrice, secondLastSwingIndex, secondLastSwingPrice, (lastSwingType == 1), time);
+     }
+   
+   // 强制刷新图表以确保新的箭头和线条能够显示
+   if(newSwingPointFound || processedBars > 0)
+     {
+      ChartRedraw(0);
      }
 
    return(rates_total);
