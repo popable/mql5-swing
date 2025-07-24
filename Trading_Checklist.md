@@ -1,16 +1,32 @@
-# Al Brooks + SwingPoints 交易执行清单
+# SwingPoints v2.0 + Al Brooks 交易执行清单
 
 ---
 
 ## 🔧 系统设置
 
-### SwingPoints参数
+### SwingPoints v2.0 参数配置
+
+#### 快速日内交易设置
+```
+SwingPeriod = 3
+ShowOnlyConfirmed = false     // 快速模式
+UltraFastMode = false         // 平衡速度和准确性
+ConfirmationBars = 1
+MinPriceMove = 30            // 根据品种调整
+ShowSwingRelationLabels = true   // 显示HH/HL/LH/LL
+ShowTrendAnalysis = true     // 显示趋势分析
+ShowPrevHighLow = true       // 显示支撑阻力
+```
+
+#### 稳健波段交易设置
 ```
 SwingPeriod = 5
-ArrowGap = 30
-ShowOnlyConfirmed = true
-MinPriceMove = 50
-所有其他显示 = false（纯PA）
+ShowOnlyConfirmed = true     // 确认模式
+ConfirmationBars = 2
+MinPriceMove = 50            // 根据品种调整
+ShowSwingRelationLabels = true
+ShowTrendAnalysis = true
+ShowTrendLines = true        // 辅助趋势线
 ```
 
 ### EMA20设置
@@ -25,28 +41,64 @@ Color = 明显颜色（如蓝色）
 
 ## 📋 交易前检查
 
+### 系统状态确认 ✅
+- [ ] SwingPoints指标正常运行
+- [ ] 实时更新功能正常（箭头和线条及时显示）
+- [ ] HH/HL/LH/LL标签正确显示
+- [ ] 趋势分析状态清晰可见
+- [ ] 支撑阻力线正确绘制
+
 ### 市场状态确认 ✅
-- [ ] 确定当前趋势方向（H1图表）
-- [ ] 识别主要支撑阻力位
-- [ ] 观察EMA20方向和价格位置
-- [ ] 确认SwingPoints结构
+- [ ] 确定当前自动趋势识别结果（🟢上升/🔴下降/🟡震荡）
+- [ ] 识别最新的HH/HL/LH/LL模式
+- [ ] 观察前期高低点支撑阻力线
+- [ ] 确认EMA20方向和价格位置
+- [ ] 评估趋势强度（强/中/弱）
 
 ### 交易时段确认 ✅
-- [ ] 欧洲时段：15:00-19:00（北京时间）
-- [ ] 美国时段：21:00-01:00（北京时间）
-- [ ] 避免数据发布前后1小时
+- [ ] 黄金：欧美重叠时段（21:00-02:00北京时间）最佳
+- [ ] 外汇：伦敦时段（15:00-24:00北京时间）
+- [ ] 避免重要数据发布前后1小时
 - [ ] 避免市场开盘前后30分钟
+- [ ] 确认当前时段的波动特性
 
 ---
 
 ## 🎯 入场信号检查
 
-### 趋势延续做多 ✅
-- [ ] 价格在EMA20上方运行
-- [ ] SwingPoints显示Higher Low结构
-- [ ] 价格回调至EMA20获得支撑
+### 上升趋势买入信号 ✅
+- [ ] 系统显示🟢上升趋势状态
+- [ ] 出现新的HL（Higher Low）标识
+- [ ] 价格在EMA20上方或回调至EMA20获得支撑
+- [ ] HL位置高于前一个摆动低点
 - [ ] 出现强势反弹K线确认
+- [ ] 前期高点线（阻力）距离合理
 - [ ] 风险回报比 > 1:2
+
+### 下降趋势卖出信号 ✅
+- [ ] 系统显示🔴下降趋势状态
+- [ ] 出现新的LH（Lower High）标识
+- [ ] 价格在EMA20下方或反弹至EMA20遇阻
+- [ ] LH位置低于前一个摆动高点
+- [ ] 出现强势回落K线确认
+- [ ] 前期低点线（支撑）距离合理
+- [ ] 风险回报比 > 1:2
+
+### 趋势转换信号 ✅
+- [ ] HH/HL模式被打破（上升趋势转换）
+- [ ] LH/LL模式被打破（下降趋势转换）
+- [ ] 趋势状态从明确转为🟡震荡
+- [ ] 价格突破关键支撑阻力线
+- [ ] EMA20方向发生改变
+- [ ] 成交量配合确认突破
+
+### 区间震荡交易信号 ✅
+- [ ] 系统显示🟡区间震荡状态
+- [ ] 价格接近区间上沿（考虑卖出）
+- [ ] 价格接近区间下沿（考虑买入）
+- [ ] 前期高低点线清晰标识区间边界
+- [ ] 无明确的HH/HL或LH/LL模式
+- [ ] 快进快出策略，严格止损
 
 ### 趋势延续做空 ✅
 - [ ] 价格在EMA20下方运行
