@@ -32,6 +32,14 @@ input color HighTopColor = clrOrange; // 高点顶部射线颜色
 input color LowBottomColor = clrLime; // 低点底部射线颜色
 input int TopBottomLineWidth = 2;     // 顶部底部射线宽度
 input ENUM_LINE_STYLE TopBottomLineStyle = STYLE_SOLID; // 顶部底部射线样式
+// --- 新增：高低点关系标签参数
+input bool ShowSwingRelationLabels = true;  // 显示摆动点关系标签
+input color HigherHighColor = clrLime;       // Higher High标签颜色
+input color LowerHighColor = clrRed;         // Lower High标签颜色
+input color HigherLowColor = clrGreen;       // Higher Low标签颜色
+input color LowerLowColor = clrMaroon;       // Lower Low标签颜色
+input int LabelFontSize = 8;                 // 标签字体大小
+input string LabelFont = "Arial";            // 标签字体
 
 //--- 指标缓冲区
 double SwingHighBuffer[];
@@ -76,6 +84,22 @@ int totalLowsFound = 0;           // 总低点数量
 string highTopLineName = "HighTopLine";   // 高点顶部射线名称
 string lowBottomLineName = "LowBottomLine"; // 低点底部射线名称
 
+// --- 新增：摆动点关系跟踪变量
+struct SwingPointData
+  {
+   double price;         // 价格
+   int index;           // K线索引
+   datetime time;       // 时间
+   string relation;     // 关系：HH, LH, HL, LL
+  };
+
+SwingPointData lastHighPoint;      // 上一个高点
+SwingPointData lastLowPoint;       // 上一个低点
+SwingPointData secondLastHighPoint; // 上上个高点
+SwingPointData secondLastLowPoint;  // 上上个低点
+string relationLabelPrefix = "SwingRelation_"; // 关系标签前缀
+int labelCounter = 0;              // 标签计数器
+
 //--- 绘图属性
 #property indicator_label1 "Swing High"
 #property indicator_type1 DRAW_ARROW
@@ -108,6 +132,13 @@ int OnInit()
    
    // 智能计算有效的箭头间距和最小价格变动
    CalculateEffectiveValues();
+   
+   // 初始化摆动点关系跟踪结构
+   InitializeSwingPointData(lastHighPoint);
+   InitializeSwingPointData(lastLowPoint);
+   InitializeSwingPointData(secondLastHighPoint);
+   InitializeSwingPointData(secondLastLowPoint);
+   labelCounter = 0;
    
    return(INIT_SUCCEEDED);
   }
@@ -264,6 +295,12 @@ int OnCalculate(const int rates_total,
       ArrayInitialize(allRecentLows, 0);
       ArrayInitialize(allRecentHighsIndices, -1);
       ArrayInitialize(allRecentLowsIndices, -1);
+      // 初始化摆动点关系跟踪
+      InitializeSwingPointData(lastHighPoint);
+      InitializeSwingPointData(lastLowPoint);
+      InitializeSwingPointData(secondLastHighPoint);
+      InitializeSwingPointData(secondLastLowPoint);
+      labelCounter = 0;
       
       // 重新计算有效值（防止品种切换）
       CalculateEffectiveValues();
@@ -425,6 +462,13 @@ int OnCalculate(const int rates_total,
          // 检查是否是连续高点替换模式
          bool isConsecutiveHighReplacement = (lastSwingType == 1);
          
+         // 计算高点关系并创建标签
+         string highRelation = "";
+         if(ShowSwingRelationLabels)
+           {
+            highRelation = CalculateHighRelation(curHigh, checkIndex, time);
+           }
+         
          // 更新波段点信息（只有在非替换模式下才更新secondLast）
          if(!isConsecutiveHighReplacement)
            {
@@ -456,6 +500,13 @@ int OnCalculate(const int rates_total,
          
          // 检查是否是连续低点替换模式
          bool isConsecutiveLowReplacement = (lastSwingType == -1);
+         
+         // 计算低点关系并创建标签
+         string lowRelation = "";
+         if(ShowSwingRelationLabels)
+           {
+            lowRelation = CalculateLowRelation(curLow, checkIndex, time);
+           }
          
          // 更新波段点信息（只有在非替换模式下才更新secondLast）
          if(!isConsecutiveLowReplacement)
@@ -963,7 +1014,8 @@ void CleanupOldObjects()
          StringFind(objName, prevHighLineName) >= 0 ||
          StringFind(objName, prevLowLineName) >= 0 ||
          StringFind(objName, highTopLineName) >= 0 ||
-         StringFind(objName, lowBottomLineName) >= 0)
+         StringFind(objName, lowBottomLineName) >= 0 ||
+         StringFind(objName, relationLabelPrefix) >= 0)
         {
          ArrayResize(objectsToDelete, deleteCount + 1);
          objectsToDelete[deleteCount] = objName;
@@ -1522,6 +1574,12 @@ bool ProcessConsecutiveHighPoints(double currentHigh, int currentIndex)
       if(lastSwingIndex >= 0)
         {
          SwingHighBuffer[lastSwingIndex] = EMPTY_VALUE;
+         
+         // 删除上一个高点的关系标签
+         if(ShowSwingRelationLabels)
+           {
+            DeleteRelationLabelsAtIndex(lastSwingIndex);
+           }
         }
       
       // 更新扩展高点跟踪数组中的最新点（如果存在）
@@ -1565,6 +1623,12 @@ bool ProcessConsecutiveLowPoints(double currentLow, int currentIndex)
       if(lastSwingIndex >= 0)
         {
          SwingLowBuffer[lastSwingIndex] = EMPTY_VALUE;
+         
+         // 删除上一个低点的关系标签
+         if(ShowSwingRelationLabels)
+           {
+            DeleteRelationLabelsAtIndex(lastSwingIndex);
+           }
         }
       
       // 更新扩展低点跟踪数组中的最新点（如果存在）
@@ -1586,3 +1650,189 @@ bool ProcessConsecutiveLowPoints(double currentLow, int currentIndex)
      }
   }
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| 初始化摆动点数据结构                                                 |
+//+------------------------------------------------------------------+
+void InitializeSwingPointData(SwingPointData &point)
+  {
+   point.price = 0;
+   point.index = -1;
+   point.time = 0;
+   point.relation = "";
+  }
+
+//+------------------------------------------------------------------+
+//| 计算高点关系                                                        |
+//+------------------------------------------------------------------+
+string CalculateHighRelation(double currentHigh, int currentIndex, const datetime &time[])
+  {
+   string relation = "";
+   
+   // 如果没有前一个高点，这是第一个高点
+   if(lastHighPoint.index == -1)
+     {
+      // 保存当前高点为前一个高点，为下次比较做准备
+      secondLastHighPoint = lastHighPoint;
+      lastHighPoint.price = currentHigh;
+      lastHighPoint.index = currentIndex;
+      lastHighPoint.time = time[currentIndex];
+      lastHighPoint.relation = "First High";
+      return ""; // 第一个高点不显示关系标签
+     }
+   
+   // 比较当前高点与前一个高点
+   if(currentHigh > lastHighPoint.price)
+     {
+      relation = "HH"; // Higher High
+     }
+   else
+     {
+      relation = "LH"; // Lower High
+     }
+   
+   // 创建关系标签
+   CreateSwingRelationLabel(currentHigh, currentIndex, time[currentIndex], relation, true);
+   
+   // 更新高点历史
+   secondLastHighPoint = lastHighPoint;
+   lastHighPoint.price = currentHigh;
+   lastHighPoint.index = currentIndex;
+   lastHighPoint.time = time[currentIndex];
+   lastHighPoint.relation = relation;
+   
+   Print("高点关系计算：当前高点 ", currentHigh, " [", currentIndex, "] 相对于前一个高点 ", 
+         secondLastHighPoint.price, " [", secondLastHighPoint.index, "] 的关系是：", relation);
+   
+   return relation;
+  }
+
+//+------------------------------------------------------------------+
+//| 计算低点关系                                                        |
+//+------------------------------------------------------------------+
+string CalculateLowRelation(double currentLow, int currentIndex, const datetime &time[])
+  {
+   string relation = "";
+   
+   // 如果没有前一个低点，这是第一个低点
+   if(lastLowPoint.index == -1)
+     {
+      // 保存当前低点为前一个低点，为下次比较做准备
+      secondLastLowPoint = lastLowPoint;
+      lastLowPoint.price = currentLow;
+      lastLowPoint.index = currentIndex;
+      lastLowPoint.time = time[currentIndex];
+      lastLowPoint.relation = "First Low";
+      return ""; // 第一个低点不显示关系标签
+     }
+   
+   // 比较当前低点与前一个低点
+   if(currentLow > lastLowPoint.price)
+     {
+      relation = "HL"; // Higher Low
+     }
+   else
+     {
+      relation = "LL"; // Lower Low
+     }
+   
+   // 创建关系标签
+   CreateSwingRelationLabel(currentLow, currentIndex, time[currentIndex], relation, false);
+   
+   // 更新低点历史
+   secondLastLowPoint = lastLowPoint;
+   lastLowPoint.price = currentLow;
+   lastLowPoint.index = currentIndex;
+   lastLowPoint.time = time[currentIndex];
+   lastLowPoint.relation = relation;
+   
+   Print("低点关系计算：当前低点 ", currentLow, " [", currentIndex, "] 相对于前一个低点 ", 
+         secondLastLowPoint.price, " [", secondLastLowPoint.index, "] 的关系是：", relation);
+   
+   return relation;
+  }
+
+//+------------------------------------------------------------------+
+//| 创建摆动点关系标签                                                   |
+//+------------------------------------------------------------------+
+void CreateSwingRelationLabel(double price, int barIndex, datetime barTime, string relation, bool isHigh)
+  {
+   // 生成唯一的标签名称
+   string labelName = relationLabelPrefix + IntegerToString(labelCounter) + "_" + relation + "_" + IntegerToString(barIndex);
+   labelCounter++;
+   
+   // 计算标签位置（在箭头上方或下方）
+   double labelPrice;
+   ENUM_ANCHOR_POINT anchor;
+   color labelColor;
+   
+   if(isHigh)
+     {
+      labelPrice = price + effectiveArrowGap * 2; // 在高点箭头上方
+      anchor = ANCHOR_LOWER;
+      
+      if(relation == "HH")
+         labelColor = HigherHighColor;
+      else
+         labelColor = LowerHighColor;
+     }
+   else
+     {
+      labelPrice = price - effectiveArrowGap * 2; // 在低点箭头下方
+      anchor = ANCHOR_UPPER;
+      
+      if(relation == "HL")
+         labelColor = HigherLowColor;
+      else
+         labelColor = LowerLowColor;
+     }
+   
+   // 创建文本标签
+   if(ObjectCreate(0, labelName, OBJ_TEXT, 0, barTime, labelPrice))
+     {
+      ObjectSetString(0, labelName, OBJPROP_TEXT, relation);
+      ObjectSetString(0, labelName, OBJPROP_FONT, LabelFont);
+      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, LabelFontSize);
+      ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
+      ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+      ObjectSetInteger(0, labelName, OBJPROP_BACK, false);
+      ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, true);
+      
+      Print("创建关系标签：", relation, " 在 [", barIndex, "] ", price, " 时间：", TimeToString(barTime));
+     }
+   else
+     {
+      Print("创建关系标签失败：", relation, " 在 [", barIndex, "] ", price);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 删除特定索引处的关系标签                                              |
+//+------------------------------------------------------------------+
+void DeleteRelationLabelsAtIndex(int barIndex)
+  {
+   int totalObjects = ObjectsTotal(0);
+   string labelsToDelete[];
+   int deleteCount = 0;
+   
+   // 查找包含特定索引的关系标签
+   for(int i = 0; i < totalObjects; i++)
+     {
+      string objName = ObjectName(0, i);
+      if(StringFind(objName, relationLabelPrefix) >= 0 && 
+         StringFind(objName, "_" + IntegerToString(barIndex)) >= 0)
+        {
+         ArrayResize(labelsToDelete, deleteCount + 1);
+         labelsToDelete[deleteCount] = objName;
+         deleteCount++;
+        }
+     }
+   
+   // 删除找到的标签
+   for(int i = 0; i < deleteCount; i++)
+     {
+      ObjectDelete(0, labelsToDelete[i]);
+      Print("删除关系标签：", labelsToDelete[i]);
+     }
+  }
