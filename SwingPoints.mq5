@@ -20,6 +20,18 @@ input color TrendLineColor = clrGray; // 趋势线颜色
 input int TrendLineWidth = 1;         // 趋势线宽度
 input bool SendAlerts = false;        // 发送提醒
 input int MaxBarsToCalculate = 500;   // 最大计算K线数量
+input bool OptimizeDrawing = true;    // 优化绘制性能（只在波段点更新时重绘）
+input bool ShowPrevHighLow = true;    // 显示前期高低点水平线
+input color PrevHighColor = clrRed;   // 前期高点线颜色
+input color PrevLowColor = clrBlue;   // 前期低点线颜色
+input int PrevLineWidth = 1;          // 前期高低点线宽度
+input ENUM_LINE_STYLE PrevLineStyle = STYLE_DASH; // 前期高低点线样式
+input bool ShowHighTopLine = true;    // 显示高点顶部射线
+input bool ShowLowBottomLine = true;  // 显示低点底部射线
+input color HighTopColor = clrOrange; // 高点顶部射线颜色
+input color LowBottomColor = clrLime; // 低点底部射线颜色
+input int TopBottomLineWidth = 2;     // 顶部底部射线宽度
+input ENUM_LINE_STYLE TopBottomLineStyle = STYLE_SOLID; // 顶部底部射线样式
 
 //--- 指标缓冲区
 double SwingHighBuffer[];
@@ -44,6 +56,25 @@ string lastCreatedTrendLine = ""; // 最后创建的趋势线名称
 string lastCreatedFibLevel = "";  // 最后创建的斐波那契名称
 double effectiveArrowGap = 0;     // 有效箭头间距
 double effectiveMinPriceMove = 0; // 有效最小价格变动
+bool newSwingPointFound = false;  // 是否发现新的波段点
+// 前期高低点追踪变量
+double prevHighPrice = 0;         // 前期高点价格（最近两个高点中较高的）
+double prevLowPrice = 0;          // 前期低点价格（最近两个低点中较低的）
+int highPointsFound = 0;          // 已找到的高点数量
+int lowPointsFound = 0;           // 已找到的低点数量
+double recentHighs[2];            // 最近两个高点价格
+double recentLows[2];             // 最近两个低点价格
+string prevHighLineName = "PrevHighLine"; // 前期高点线名称
+string prevLowLineName = "PrevLowLine";   // 前期低点线名称
+// 扩展高低点跟踪，用于绘制射线
+double allRecentHighs[4];         // 最近四个高点价格
+double allRecentLows[4];          // 最近四个低点价格
+int allRecentHighsIndices[4];     // 最近四个高点索引
+int allRecentLowsIndices[4];      // 最近四个低点索引
+int totalHighsFound = 0;          // 总高点数量
+int totalLowsFound = 0;           // 总低点数量
+string highTopLineName = "HighTopLine";   // 高点顶部射线名称
+string lowBottomLineName = "LowBottomLine"; // 低点底部射线名称
 
 //--- 绘图属性
 #property indicator_label1 "Swing High"
@@ -218,6 +249,21 @@ int OnCalculate(const int rates_total,
       fibLevelCounter = 0;
       lastCreatedTrendLine = "";
       lastCreatedFibLevel = "";
+      newSwingPointFound = false;
+      // 初始化前期高低点变量
+      prevHighPrice = 0;
+      prevLowPrice = 0;
+      highPointsFound = 0;
+      lowPointsFound = 0;
+      ArrayInitialize(recentHighs, 0);
+      ArrayInitialize(recentLows, 0);
+      // 初始化扩展高低点跟踪
+      totalHighsFound = 0;
+      totalLowsFound = 0;
+      ArrayInitialize(allRecentHighs, 0);
+      ArrayInitialize(allRecentLows, 0);
+      ArrayInitialize(allRecentHighsIndices, -1);
+      ArrayInitialize(allRecentLowsIndices, -1);
       
       // 重新计算有效值（防止品种切换）
       CalculateEffectiveValues();
@@ -232,6 +278,7 @@ int OnCalculate(const int rates_total,
    // 检测波段高低点 (交替出现版本) - 限制在有效范围内
    int processedBars = 0;
    datetime startTime = TimeCurrent();
+   newSwingPointFound = false; // 重置标志
    
    for(int i = effectiveStart; i < limit; i++)
      {
@@ -341,6 +388,13 @@ int OnCalculate(const int rates_total,
             // 同时更新高点跟踪
             lastHighIndex = checkIndex;
             lastHighPrice = curHigh;
+            
+            // 需要更新扩展高点跟踪数组中的最新点
+            if(totalHighsFound > 0)
+              {
+               allRecentHighs[0] = curHigh;
+               allRecentHighsIndices[0] = checkIndex;
+              }
            }
          else
            {
@@ -360,6 +414,13 @@ int OnCalculate(const int rates_total,
             // 同时更新低点跟踪
             lastLowIndex = checkIndex;
             lastLowPrice = curLow;
+            
+            // 需要更新扩展低点跟踪数组中的最新点
+            if(totalLowsFound > 0)
+              {
+               allRecentLows[0] = curLow;
+               allRecentLowsIndices[0] = checkIndex;
+              }
            }
          else
            {
@@ -383,12 +444,13 @@ int OnCalculate(const int rates_total,
          // 更新最后的高点信息
          lastHighIndex = checkIndex;
          lastHighPrice = curHigh;
+         newSwingPointFound = true;
          
-         // 绘制趋势线和工具 - 斐波那契需要一个高点和一个低点
-         if(secondLastSwingIndex >= 0)
-           {
-            DrawTradingTools(checkIndex, curHigh, secondLastSwingIndex, secondLastSwingPrice, true, time);
-           }
+         // 更新前期高点跟踪
+         UpdatePrevHighPoints(curHigh);
+         
+         // 只有在实际显示箭头时才更新扩展高点跟踪
+         UpdateAllHighPoints(curHigh, checkIndex);
         }
       else if(isLow)
         {
@@ -404,12 +466,13 @@ int OnCalculate(const int rates_total,
          // 更新最后的低点信息
          lastLowIndex = checkIndex;
          lastLowPrice = curLow;
+         newSwingPointFound = true;
          
-         // 绘制趋势线和工具 - 斐波那契需要一个高点和一个低点
-         if(secondLastSwingIndex >= 0)
-           {
-            DrawTradingTools(checkIndex, curLow, secondLastSwingIndex, secondLastSwingPrice, false, time);
-           }
+         // 更新前期低点跟踪
+         UpdatePrevLowPoints(curLow);
+         
+         // 只有在实际显示箭头时才更新扩展低点跟踪
+         UpdateAllLowPoints(curLow, checkIndex);
         }
      }
 
@@ -418,6 +481,13 @@ int OnCalculate(const int rates_total,
    if(processedBars > 0)
      {
       Print("处理了 ", processedBars, " 根K线，用时 ", (endTime - startTime), " 秒");
+     }
+
+   // 在所有波段点计算完成后，统一绘制趋势线和斐波那契回调
+   // 只在有新波段点或者性能优化关闭时才重绘
+   if((newSwingPointFound || !OptimizeDrawing) && lastSwingIndex >= 0 && secondLastSwingIndex >= 0)
+     {
+      DrawTradingTools(lastSwingIndex, lastSwingPrice, secondLastSwingIndex, secondLastSwingPrice, (lastSwingType == 1), time);
      }
 
    return(rates_total);
@@ -535,12 +605,79 @@ void FindRecentSwingPoints(int startIndex, int endIndex, const double &high[], c
             foundCount >= 2 ? StringFormat(", 倒数第二: 索引%d, 价格%.5f", secondLastSwingIndex, secondLastSwingPrice) : "");
       Print("高点跟踪: 索引", lastHighIndex, ", 价格", lastHighPrice);
       Print("低点跟踪: 索引", lastLowIndex, ", 价格", lastLowPrice);
+      
+      // 初始化前期高低点数据
+      InitializePrevHighLowFromFound(foundCount, foundTypes, foundPrices);
      }
    else
      {
       Print("在指定范围内未找到波段点，将从头开始计算");
      }
   }
+
+//+------------------------------------------------------------------+
+//| 从找到的波段点初始化前期高低点                                       |
+//+------------------------------------------------------------------+
+void InitializePrevHighLowFromFound(int foundCount, int &foundTypes[], double &foundPrices[])
+  {
+   // 重置计数器
+   highPointsFound = 0;
+   lowPointsFound = 0;
+   ArrayInitialize(recentHighs, 0);
+   ArrayInitialize(recentLows, 0);
+   
+   // 重置扩展跟踪
+   totalHighsFound = 0;
+   totalLowsFound = 0;
+   ArrayInitialize(allRecentHighs, 0);
+   ArrayInitialize(allRecentLows, 0);
+   ArrayInitialize(allRecentHighsIndices, -1);
+   ArrayInitialize(allRecentLowsIndices, -1);
+   
+   // 从最近找到的波段点中提取高点和低点
+   for(int i = 0; i < foundCount; i++)
+     {
+      if(foundTypes[i] == 1) // 高点
+        {
+         if(highPointsFound < 2)
+           {
+            recentHighs[highPointsFound] = foundPrices[i];
+            highPointsFound++;
+           }
+        }
+      else if(foundTypes[i] == -1) // 低点
+        {
+         if(lowPointsFound < 2)
+           {
+            recentLows[lowPointsFound] = foundPrices[i];
+            lowPointsFound++;
+           }
+        }
+     }
+   
+   // 计算前期高低点
+   if(highPointsFound >= 1)
+     {
+      prevHighPrice = recentHighs[0];
+      if(highPointsFound == 2)
+        {
+         prevHighPrice = MathMax(recentHighs[0], recentHighs[1]);
+        }
+     }
+   
+   if(lowPointsFound >= 1)
+     {
+      prevLowPrice = recentLows[0];
+      if(lowPointsFound == 2)
+        {
+         prevLowPrice = MathMin(recentLows[0], recentLows[1]);
+        }
+     }
+   
+   Print("初始化前期高低点 - 高点数:", highPointsFound, ", 前期高点:", prevHighPrice, 
+         ", 低点数:", lowPointsFound, ", 前期低点:", prevLowPrice);
+  }
+
 //+------------------------------------------------------------------+
 //| 绘制交易工具函数                                                    |
 //+------------------------------------------------------------------+
@@ -550,39 +687,10 @@ void DrawTradingTools(int currentIndex, double currentPrice, int lastIndex, doub
    datetime currentTime = time[currentIndex];
    datetime lastTime = time[lastIndex];
    
-   // 绘制趋势线
+   // 绘制趋势线 - 只绘制最新的趋势线
    if(ShowTrendLines)
      {
-      // 使用波段点索引作为唯一标识符，避免重复创建
-      string lineName = trendLineName + "_" + IntegerToString(lastIndex) + "_" + IntegerToString(currentIndex);
-      
-      // 检查对象是否已存在，避免重复创建
-      if(ObjectFind(0, lineName) < 0)
-        {
-         if(ObjectCreate(0, lineName, OBJ_TREND, 0, lastTime, lastPrice, currentTime, currentPrice))
-           {
-            ObjectSetInteger(0, lineName, OBJPROP_COLOR, TrendLineColor);
-            ObjectSetInteger(0, lineName, OBJPROP_WIDTH, TrendLineWidth);
-            ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_SOLID);
-            ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, true);
-            ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
-            
-            // 删除上一条趋势线，保持只显示最新的
-            if(lastCreatedTrendLine != "" && lastCreatedTrendLine != lineName)
-              {
-               ObjectDelete(0, lastCreatedTrendLine);
-              }
-            
-            lastCreatedTrendLine = lineName;
-            trendLineCounter++;
-            
-            // 清理过多的旧趋势线
-            if(trendLineCounter > MaxTrendLines)
-              {
-               CleanupOldTrendLines();
-              }
-           }
-        }
+      DrawTrendLine(currentIndex, currentPrice, lastIndex, lastPrice, currentTime, lastTime);
      }
    
    // 检查趋势线突破
@@ -595,6 +703,65 @@ void DrawTradingTools(int currentIndex, double currentPrice, int lastIndex, doub
    if(ShowFibonacci)
      {
       DrawFibonacci(time);
+     }
+   
+   // 绘制前期高低点水平线
+   if(ShowPrevHighLow)
+     {
+      DrawPrevHighLowLines();
+     }
+   
+   // 绘制高点顶部和低点底部射线
+   if(ShowHighTopLine || ShowLowBottomLine)
+     {
+      DrawTopBottomLines(time);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 绘制趋势线                                                         |
+//+------------------------------------------------------------------+
+void DrawTrendLine(int currentIndex, double currentPrice, int lastIndex, double lastPrice, datetime currentTime, datetime lastTime)
+  {
+   // 使用波段点索引作为唯一标识符
+   string lineName = trendLineName + "_" + IntegerToString(lastIndex) + "_" + IntegerToString(currentIndex);
+   
+   // 检查对象是否已存在，避免重复创建
+   if(ObjectFind(0, lineName) < 0)
+     {
+      if(ObjectCreate(0, lineName, OBJ_TREND, 0, lastTime, lastPrice, currentTime, currentPrice))
+        {
+         ObjectSetInteger(0, lineName, OBJPROP_COLOR, TrendLineColor);
+         ObjectSetInteger(0, lineName, OBJPROP_WIDTH, TrendLineWidth);
+         ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, true);
+         ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+         
+         // 删除上一条趋势线，保持只显示最新的
+         if(lastCreatedTrendLine != "" && lastCreatedTrendLine != lineName)
+           {
+            ObjectDelete(0, lastCreatedTrendLine);
+           }
+         
+         lastCreatedTrendLine = lineName;
+         trendLineCounter++;
+         
+         // 清理过多的旧趋势线
+         if(trendLineCounter > MaxTrendLines)
+           {
+            CleanupOldTrendLines();
+           }
+           
+         Print("绘制趋势线：从[", lastIndex, "] ", lastPrice, " 到[", currentIndex, "] ", currentPrice);
+        }
+     }
+   else
+     {
+      // 如果趋势线已存在，更新其坐标（防止数据更新导致的位置偏移）
+      ObjectSetInteger(0, lineName, OBJPROP_TIME, 0, lastTime);
+      ObjectSetDouble(0, lineName, OBJPROP_PRICE, 0, lastPrice);
+      ObjectSetInteger(0, lineName, OBJPROP_TIME, 1, currentTime);
+      ObjectSetDouble(0, lineName, OBJPROP_PRICE, 1, currentPrice);
      }
   }
 
@@ -658,6 +825,12 @@ void DrawFibonacci(const datetime &time[])
    // 使用最后的高点和低点索引作为唯一标识符
    string fibName = fibLevelName + "_" + IntegerToString(lastHighIndex) + "_" + IntegerToString(lastLowIndex);
    
+   // 如果斐波那契对象已经是最新的，不需要重绘
+   if(lastCreatedFibLevel == fibName && ObjectFind(0, fibName) >= 0)
+     {
+      return;
+     }
+   
    datetime highTime = time[lastHighIndex];
    datetime lowTime = time[lastLowIndex];
    
@@ -707,6 +880,22 @@ void DrawFibonacci(const datetime &time[])
            
          Print("绘制斐波那契回调：高点[", lastHighIndex, "] ", lastHighPrice, " -> 低点[", lastLowIndex, "] ", lastLowPrice);
         }
+     }
+   else
+     {
+      // 如果斐波那契对象已存在，更新其坐标
+      ObjectSetInteger(0, fibName, OBJPROP_TIME, 0, highTime);
+      ObjectSetDouble(0, fibName, OBJPROP_PRICE, 0, lastHighPrice);
+      ObjectSetInteger(0, fibName, OBJPROP_TIME, 1, lowTime);
+      ObjectSetDouble(0, fibName, OBJPROP_PRICE, 1, lastLowPrice);
+      
+      // 删除上一个斐波那契回调
+      if(lastCreatedFibLevel != "" && lastCreatedFibLevel != fibName)
+        {
+         ObjectDelete(0, lastCreatedFibLevel);
+        }
+      
+      lastCreatedFibLevel = fibName;
      }
   }
 
@@ -761,7 +950,12 @@ void CleanupOldObjects()
    for(int i = 0; i < totalObjects; i++)
      {
       string objName = ObjectName(0, i);
-      if(StringFind(objName, trendLineName) >= 0 || StringFind(objName, fibLevelName) >= 0)
+      if(StringFind(objName, trendLineName) >= 0 || 
+         StringFind(objName, fibLevelName) >= 0 ||
+         StringFind(objName, prevHighLineName) >= 0 ||
+         StringFind(objName, prevLowLineName) >= 0 ||
+         StringFind(objName, highTopLineName) >= 0 ||
+         StringFind(objName, lowBottomLineName) >= 0)
         {
          ArrayResize(objectsToDelete, deleteCount + 1);
          objectsToDelete[deleteCount] = objName;
@@ -843,6 +1037,413 @@ void CleanupOldFibLevels()
         {
          ObjectDelete(0, fibObjects[i]);
         }
+     }
+  }
+//+------------------------------------------------------------------+
+//| 更新前期高点跟踪                                                    |
+//+------------------------------------------------------------------+
+void UpdatePrevHighPoints(double newHigh)
+  {
+   if(highPointsFound == 0)
+     {
+      // 第一个高点
+      recentHighs[0] = newHigh;
+      highPointsFound = 1;
+      prevHighPrice = newHigh;
+     }
+   else if(highPointsFound == 1)
+     {
+      // 第二个高点
+      recentHighs[1] = newHigh;
+      highPointsFound = 2;
+      // 取两个高点中较高的作为前期高点
+      prevHighPrice = MathMax(recentHighs[0], recentHighs[1]);
+     }
+   else
+     {
+      // 已有两个高点，移位并添加新高点
+      recentHighs[0] = recentHighs[1];
+      recentHighs[1] = newHigh;
+      // 取两个高点中较高的作为前期高点
+      prevHighPrice = MathMax(recentHighs[0], recentHighs[1]);
+     }
+   
+   Print("更新前期高点：新高点=", newHigh, ", 前期高点=", prevHighPrice);
+  }
+
+//+------------------------------------------------------------------+
+//| 更新前期低点跟踪                                                    |
+//+------------------------------------------------------------------+
+void UpdatePrevLowPoints(double newLow)
+  {
+   if(lowPointsFound == 0)
+     {
+      // 第一个低点
+      recentLows[0] = newLow;
+      lowPointsFound = 1;
+      prevLowPrice = newLow;
+     }
+   else if(lowPointsFound == 1)
+     {
+      // 第二个低点
+      recentLows[1] = newLow;
+      lowPointsFound = 2;
+      // 取两个低点中较低的作为前期低点
+      prevLowPrice = MathMin(recentLows[0], recentLows[1]);
+     }
+   else
+     {
+      // 已有两个低点，移位并添加新低点
+      recentLows[0] = recentLows[1];
+      recentLows[1] = newLow;
+      // 取两个低点中较低的作为前期低点
+      prevLowPrice = MathMin(recentLows[0], recentLows[1]);
+     }
+   
+   Print("更新前期低点：新低点=", newLow, ", 前期低点=", prevLowPrice);
+  }
+
+//+------------------------------------------------------------------+
+//| 绘制前期高低点水平线                                                 |
+//+------------------------------------------------------------------+
+void DrawPrevHighLowLines()
+  {
+   // 绘制前期高点线
+   if(prevHighPrice > 0)
+     {
+      if(ObjectFind(0, prevHighLineName) < 0)
+        {
+         // 创建水平线（射线）
+         if(ObjectCreate(0, prevHighLineName, OBJ_HLINE, 0, 0, prevHighPrice))
+           {
+            ObjectSetInteger(0, prevHighLineName, OBJPROP_COLOR, PrevHighColor);
+            ObjectSetInteger(0, prevHighLineName, OBJPROP_WIDTH, PrevLineWidth);
+            ObjectSetInteger(0, prevHighLineName, OBJPROP_STYLE, PrevLineStyle);
+            ObjectSetInteger(0, prevHighLineName, OBJPROP_BACK, false);
+            ObjectSetString(0, prevHighLineName, OBJPROP_TEXT, "Prev High: " + DoubleToString(prevHighPrice, _Digits));
+           }
+        }
+      else
+        {
+         // 更新现有水平线的价格
+         ObjectSetDouble(0, prevHighLineName, OBJPROP_PRICE, 0, prevHighPrice);
+         ObjectSetString(0, prevHighLineName, OBJPROP_TEXT, "Prev High: " + DoubleToString(prevHighPrice, _Digits));
+        }
+     }
+   
+   // 绘制前期低点线
+   if(prevLowPrice > 0)
+     {
+      if(ObjectFind(0, prevLowLineName) < 0)
+        {
+         // 创建水平线（射线）
+         if(ObjectCreate(0, prevLowLineName, OBJ_HLINE, 0, 0, prevLowPrice))
+           {
+            ObjectSetInteger(0, prevLowLineName, OBJPROP_COLOR, PrevLowColor);
+            ObjectSetInteger(0, prevLowLineName, OBJPROP_WIDTH, PrevLineWidth);
+            ObjectSetInteger(0, prevLowLineName, OBJPROP_STYLE, PrevLineStyle);
+            ObjectSetInteger(0, prevLowLineName, OBJPROP_BACK, false);
+            ObjectSetString(0, prevLowLineName, OBJPROP_TEXT, "Prev Low: " + DoubleToString(prevLowPrice, _Digits));
+           }
+        }
+      else
+        {
+         // 更新现有水平线的价格
+         ObjectSetDouble(0, prevLowLineName, OBJPROP_PRICE, 0, prevLowPrice);
+         ObjectSetString(0, prevLowLineName, OBJPROP_TEXT, "Prev Low: " + DoubleToString(prevLowPrice, _Digits));
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 更新所有高点跟踪                                                    |
+//+------------------------------------------------------------------+
+void UpdateAllHighPoints(double newHigh, int newIndex)
+  {
+   // 移位数组，添加新高点
+   for(int i = 3; i > 0; i--)
+     {
+      allRecentHighs[i] = allRecentHighs[i-1];
+      allRecentHighsIndices[i] = allRecentHighsIndices[i-1];
+     }
+   
+   // 添加新高点到最前面
+   allRecentHighs[0] = newHigh;
+   allRecentHighsIndices[0] = newIndex;
+   
+   if(totalHighsFound < 4)
+      totalHighsFound++;
+   
+   // 清理数组中无效的高点
+   CleanupInvalidHighPoints();
+   
+   Print("更新有箭头的高点：新高点[", newIndex, "]=", newHigh, ", 总高点数=", totalHighsFound);
+   
+   // 打印当前所有高点数组状态
+   string debugStr = "高点数组状态: ";
+   for(int i = 0; i < totalHighsFound; i++)
+     {
+      debugStr += StringFormat("[%d]:%.5f@%d ", i, allRecentHighs[i], allRecentHighsIndices[i]);
+     }
+   Print(debugStr);
+  }
+
+//+------------------------------------------------------------------+
+//| 更新所有低点跟踪                                                    |
+//+------------------------------------------------------------------+
+void UpdateAllLowPoints(double newLow, int newIndex)
+  {
+   // 移位数组，添加新低点
+   for(int i = 3; i > 0; i--)
+     {
+      allRecentLows[i] = allRecentLows[i-1];
+      allRecentLowsIndices[i] = allRecentLowsIndices[i-1];
+     }
+   
+   // 添加新低点到最前面
+   allRecentLows[0] = newLow;
+   allRecentLowsIndices[0] = newIndex;
+   
+   if(totalLowsFound < 4)
+      totalLowsFound++;
+   
+   // 清理数组中无效的低点
+   CleanupInvalidLowPoints();
+   
+   Print("更新有箭头的低点：新低点[", newIndex, "]=", newLow, ", 总低点数=", totalLowsFound);
+   
+   // 打印当前所有低点数组状态
+   string debugStr = "低点数组状态: ";
+   for(int i = 0; i < totalLowsFound; i++)
+     {
+      debugStr += StringFormat("[%d]:%.5f@%d ", i, allRecentLows[i], allRecentLowsIndices[i]);
+     }
+   Print(debugStr);
+  }
+
+//+------------------------------------------------------------------+
+//| 绘制高点顶部和低点底部射线                                           |
+//+------------------------------------------------------------------+
+void DrawTopBottomLines(const datetime &time[])
+  {
+   // 绘制高点顶部射线（连接倒数第2和倒数第3个有箭头的高点）
+   if(ShowHighTopLine && totalHighsFound >= 3)
+     {
+      // 查找倒数第2个和倒数第3个真正有箭头的高点
+      int validHighIndices[2];
+      double validHighPrices[2];
+      int validCount = 0;
+      
+      // 从数组中查找有效的高点（跳过索引0，因为那是最新的）
+      for(int i = 1; i < totalHighsFound && validCount < 2; i++)
+        {
+         int index = allRecentHighsIndices[i];
+         if(index >= 0 && SwingHighBuffer[index] != EMPTY_VALUE)
+           {
+            validHighIndices[validCount] = index;
+            validHighPrices[validCount] = allRecentHighs[i];
+            validCount++;
+           }
+        }
+      
+      // 确保找到了至少2个有效的高点
+      if(validCount >= 2)
+        {
+         int index2 = validHighIndices[0]; // 倒数第2个有效高点
+         int index3 = validHighIndices[1]; // 倒数第3个有效高点
+         double price2 = validHighPrices[0];
+         double price3 = validHighPrices[1];
+         
+         datetime time2 = time[index2];
+         datetime time3 = time[index3];
+         
+         // 确保索引不同
+         if(index2 != index3)
+           {
+            if(ObjectFind(0, highTopLineName) < 0)
+              {
+               // 创建射线，从较早的点到较晚的点
+               if(ObjectCreate(0, highTopLineName, OBJ_TREND, 0, time3, price3, time2, price2))
+                 {
+                  ObjectSetInteger(0, highTopLineName, OBJPROP_COLOR, HighTopColor);
+                  ObjectSetInteger(0, highTopLineName, OBJPROP_WIDTH, TopBottomLineWidth);
+                  ObjectSetInteger(0, highTopLineName, OBJPROP_STYLE, TopBottomLineStyle);
+                  ObjectSetInteger(0, highTopLineName, OBJPROP_RAY_RIGHT, true);
+                  ObjectSetInteger(0, highTopLineName, OBJPROP_RAY_LEFT, false);
+                  ObjectSetInteger(0, highTopLineName, OBJPROP_BACK, false);
+                  
+                  Print("创建高点顶部射线：从[", index3, "] ", price3, " 到[", index2, "] ", price2, " (找到", validCount, "个有效高点)");
+                 }
+              }
+            else
+              {
+               // 更新现有射线
+               ObjectSetInteger(0, highTopLineName, OBJPROP_TIME, 0, time3);
+               ObjectSetDouble(0, highTopLineName, OBJPROP_PRICE, 0, price3);
+               ObjectSetInteger(0, highTopLineName, OBJPROP_TIME, 1, time2);
+               ObjectSetDouble(0, highTopLineName, OBJPROP_PRICE, 1, price2);
+              }
+           }
+        }
+      else
+        {
+         Print("高点顶部射线跳过：只找到", validCount, "个有效高点，需要至少2个");
+        }
+     }
+   
+   // 绘制低点底部射线（连接倒数第2和倒数第3个有箭头的低点）
+   if(ShowLowBottomLine && totalLowsFound >= 3)
+     {
+      // 查找倒数第2个和倒数第3个真正有箭头的低点
+      int validLowIndices[2];
+      double validLowPrices[2];
+      int validCount = 0;
+      
+      // 从数组中查找有效的低点（跳过索引0，因为那是最新的）
+      for(int i = 1; i < totalLowsFound && validCount < 2; i++)
+        {
+         int index = allRecentLowsIndices[i];
+         if(index >= 0 && SwingLowBuffer[index] != EMPTY_VALUE)
+           {
+            validLowIndices[validCount] = index;
+            validLowPrices[validCount] = allRecentLows[i];
+            validCount++;
+           }
+        }
+      
+      // 确保找到了至少2个有效的低点
+      if(validCount >= 2)
+        {
+         int index2 = validLowIndices[0]; // 倒数第2个有效低点
+         int index3 = validLowIndices[1]; // 倒数第3个有效低点
+         double price2 = validLowPrices[0];
+         double price3 = validLowPrices[1];
+         
+         datetime time2 = time[index2];
+         datetime time3 = time[index3];
+         
+         // 确保索引不同
+         if(index2 != index3)
+           {
+            if(ObjectFind(0, lowBottomLineName) < 0)
+              {
+               // 创建射线，从较早的点到较晚的点
+               if(ObjectCreate(0, lowBottomLineName, OBJ_TREND, 0, time3, price3, time2, price2))
+                 {
+                  ObjectSetInteger(0, lowBottomLineName, OBJPROP_COLOR, LowBottomColor);
+                  ObjectSetInteger(0, lowBottomLineName, OBJPROP_WIDTH, TopBottomLineWidth);
+                  ObjectSetInteger(0, lowBottomLineName, OBJPROP_STYLE, TopBottomLineStyle);
+                  ObjectSetInteger(0, lowBottomLineName, OBJPROP_RAY_RIGHT, true);
+                  ObjectSetInteger(0, lowBottomLineName, OBJPROP_RAY_LEFT, false);
+                  ObjectSetInteger(0, lowBottomLineName, OBJPROP_BACK, false);
+                  
+                  Print("创建低点底部射线：从[", index3, "] ", price3, " 到[", index2, "] ", price2, " (找到", validCount, "个有效低点)");
+                 }
+              }
+            else
+              {
+               // 更新现有射线
+               ObjectSetInteger(0, lowBottomLineName, OBJPROP_TIME, 0, time3);
+               ObjectSetDouble(0, lowBottomLineName, OBJPROP_PRICE, 0, price3);
+               ObjectSetInteger(0, lowBottomLineName, OBJPROP_TIME, 1, time2);
+               ObjectSetDouble(0, lowBottomLineName, OBJPROP_PRICE, 1, price2);
+              }
+           }
+        }
+      else
+        {
+         Print("低点底部射线跳过：只找到", validCount, "个有效低点，需要至少2个");
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 清理无效的高点                                                      |
+//+------------------------------------------------------------------+
+void CleanupInvalidHighPoints()
+  {
+   // 压缩数组，移除无效的高点
+   int validCount = 0;
+   double tempHighs[4];
+   int tempIndices[4];
+   
+   for(int i = 0; i < totalHighsFound; i++)
+     {
+      int index = allRecentHighsIndices[i];
+      if(index >= 0 && SwingHighBuffer[index] != EMPTY_VALUE)
+        {
+         tempHighs[validCount] = allRecentHighs[i];
+         tempIndices[validCount] = allRecentHighsIndices[i];
+         validCount++;
+        }
+     }
+   
+   // 如果清理后数量有变化，更新数组
+   if(validCount != totalHighsFound)
+     {
+      Print("清理高点数组：移除了", (totalHighsFound - validCount), "个无效点，剩余", validCount, "个有效点");
+      
+      // 更新数组
+      for(int i = 0; i < 4; i++)
+        {
+         if(i < validCount)
+           {
+            allRecentHighs[i] = tempHighs[i];
+            allRecentHighsIndices[i] = tempIndices[i];
+           }
+         else
+           {
+            allRecentHighs[i] = 0;
+            allRecentHighsIndices[i] = -1;
+           }
+        }
+      
+      totalHighsFound = validCount;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 清理无效的低点                                                      |
+//+------------------------------------------------------------------+
+void CleanupInvalidLowPoints()
+  {
+   // 压缩数组，移除无效的低点
+   int validCount = 0;
+   double tempLows[4];
+   int tempIndices[4];
+   
+   for(int i = 0; i < totalLowsFound; i++)
+     {
+      int index = allRecentLowsIndices[i];
+      if(index >= 0 && SwingLowBuffer[index] != EMPTY_VALUE)
+        {
+         tempLows[validCount] = allRecentLows[i];
+         tempIndices[validCount] = allRecentLowsIndices[i];
+         validCount++;
+        }
+     }
+   
+   // 如果清理后数量有变化，更新数组
+   if(validCount != totalLowsFound)
+     {
+      Print("清理低点数组：移除了", (totalLowsFound - validCount), "个无效点，剩余", validCount, "个有效点");
+      
+      // 更新数组
+      for(int i = 0; i < 4; i++)
+        {
+         if(i < validCount)
+           {
+            allRecentLows[i] = tempLows[i];
+            allRecentLowsIndices[i] = tempIndices[i];
+           }
+         else
+           {
+            allRecentLows[i] = 0;
+            allRecentLowsIndices[i] = -1;
+           }
+        }
+      
+      totalLowsFound = validCount;
      }
   }
 //+------------------------------------------------------------------+
