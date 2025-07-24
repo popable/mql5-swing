@@ -857,9 +857,9 @@ void DrawFibonacci(const datetime &time[])
          // 设置斐波那契水平数量
          ObjectSetInteger(0, fibName, OBJPROP_LEVELS, 5);
          
-         // 批量设置斐波那契水平：显示0, 0.236, 0.382, 0.618, 1.0
-         double levels[5] = {0.0, 0.236, 0.382, 0.618, 1.0};
-         string texts[5] = {"0% (High)", "23.6%", "38.2%", "61.8%", "100% (Low)"};
+         // 批量设置斐波那契水平
+         double levels[5] = {0.0, 0.5, 1, 1.5, 2.0};
+         string texts[5] = {"0", "0.5", "1", "1.5", "2"};
          
          for(int i = 0; i < 5; i++)
            {
