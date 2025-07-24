@@ -1229,24 +1229,39 @@ void DrawTopBottomLines(const datetime &time[])
    // 绘制高点顶部射线（连接倒数第2和倒数第3个有箭头的高点）
    if(ShowHighTopLine && totalHighsFound >= 3)
      {
-      // 查找倒数第2个和倒数第3个真正有箭头的高点
+      // 查找倒数第2个和倒数第3个真正有箭头的高点，确保索引不重复
       int validHighIndices[2];
       double validHighPrices[2];
       int validCount = 0;
       
-      // 从数组中查找有效的高点（跳过索引0，因为那是最新的）
+      // 从数组中查找有效且不重复的高点（跳过索引0，因为那是最新的）
       for(int i = 1; i < totalHighsFound && validCount < 2; i++)
         {
          int index = allRecentHighsIndices[i];
          if(index >= 0 && SwingHighBuffer[index] != EMPTY_VALUE)
            {
-            validHighIndices[validCount] = index;
-            validHighPrices[validCount] = allRecentHighs[i];
-            validCount++;
+            // 检查是否与已找到的索引重复
+            bool isDuplicate = false;
+            for(int j = 0; j < validCount; j++)
+              {
+               if(validHighIndices[j] == index)
+                 {
+                  isDuplicate = true;
+                  break;
+                 }
+              }
+            
+            // 只添加不重复的索引
+            if(!isDuplicate)
+              {
+               validHighIndices[validCount] = index;
+               validHighPrices[validCount] = allRecentHighs[i];
+               validCount++;
+              }
            }
         }
       
-      // 确保找到了至少2个有效的高点
+      // 确保找到了至少2个有效且不重复的高点
       if(validCount >= 2)
         {
          int index2 = validHighIndices[0]; // 倒数第2个有效高点
@@ -1257,7 +1272,7 @@ void DrawTopBottomLines(const datetime &time[])
          datetime time2 = time[index2];
          datetime time3 = time[index3];
          
-         // 确保索引不同
+         // 确保索引不同（双重检查）
          if(index2 != index3)
            {
             if(ObjectFind(0, highTopLineName) < 0)
@@ -1284,49 +1299,69 @@ void DrawTopBottomLines(const datetime &time[])
                ObjectSetDouble(0, highTopLineName, OBJPROP_PRICE, 1, price2);
               }
            }
+         else
+           {
+            Print("错误：倒数第2个和倒数第3个高点索引相同 [", index2, "], 跳过射线绘制");
+           }
         }
       else
         {
-         Print("高点顶部射线跳过：只找到", validCount, "个有效高点，需要至少2个");
+         Print("高点顶部射线跳过：只找到", validCount, "个有效且不重复的高点，需要至少2个");
         }
      }
    
-   // 绘制低点底部射线（连接倒数第3和倒数第2个有箭头的低点，跳过最新的低点）
+   // 绘制低点底部射线（连接倒数第3个和倒数第2个有箭头的低点）
    if(ShowLowBottomLine && totalLowsFound >= 3)
      {
-      // 查找倒数第3个和倒数第2个真正有箭头的低点（跳过最新的，即索引0）
-      int validLowIndices[2];
-      double validLowPrices[2];
+      // 查找倒数第3个和倒数第2个真正有箭头的低点，确保索引不重复
+      int validLowIndices[3];
+      double validLowPrices[3];
       int validCount = 0;
       
-      // 从数组中查找有效的低点（跳过索引0，因为那是最新的低点）
-      for(int i = 1; i < totalLowsFound && validCount < 2; i++)
+      // 从数组中查找所有有效且不重复的低点
+      for(int i = 0; i < totalLowsFound && validCount < 3; i++)
         {
          int index = allRecentLowsIndices[i];
          if(index >= 0 && SwingLowBuffer[index] != EMPTY_VALUE)
            {
-            validLowIndices[validCount] = index;
-            validLowPrices[validCount] = allRecentLows[i];
-            validCount++;
+            // 检查是否与已找到的索引重复
+            bool isDuplicate = false;
+            for(int j = 0; j < validCount; j++)
+              {
+               if(validLowIndices[j] == index)
+                 {
+                  isDuplicate = true;
+                  break;
+                 }
+              }
+            
+            // 只添加不重复的索引
+            if(!isDuplicate)
+              {
+               validLowIndices[validCount] = index;
+               validLowPrices[validCount] = allRecentLows[i];
+               validCount++;
+              }
            }
         }
       
-      // 确保找到了至少2个有效的低点
-      if(validCount >= 2)
+      // 确保找到了至少3个有效且不重复的低点，连接倒数第3个和倒数第2个
+      if(validCount >= 3)
         {
-         int index2 = validLowIndices[0]; // 倒数第2个有效低点（数组中索引1）
-         int index3 = validLowIndices[1]; // 倒数第3个有效低点（数组中索引2）
-         double price2 = validLowPrices[0];
-         double price3 = validLowPrices[1];
+         int index2 = validLowIndices[1]; // 倒数第2个有效低点
+         int index3 = validLowIndices[2]; // 倒数第3个有效低点
+         double price2 = validLowPrices[1];
+         double price3 = validLowPrices[2];
          
          datetime time2 = time[index2];
          datetime time3 = time[index3];
          
          // 打印调试信息显示连接的具体低点
          Print("低点底部射线连接：倒数第3个低点[", index3, "] ", price3, " -> 倒数第2个低点[", index2, "] ", price2);
-         Print("当前低点数组状态 - 总数:", totalLowsFound, ", 最新(索引0):[", allRecentLowsIndices[0], "] ", allRecentLows[0]);
+         Print("当前低点数组状态 - 总数:", totalLowsFound, ", 有效不重复数:", validCount);
+         Print("最新3个有效低点: [", validLowIndices[0], "]", validLowPrices[0], ", [", validLowIndices[1], "]", validLowPrices[1], ", [", validLowIndices[2], "]", validLowPrices[2]);
          
-         // 确保索引不同
+         // 确保索引不同（双重检查）
          if(index2 != index3)
            {
             if(ObjectFind(0, lowBottomLineName) < 0)
@@ -1355,10 +1390,14 @@ void DrawTopBottomLines(const datetime &time[])
                Print("成功更新低点底部射线：从倒数第3个[", index3, "] ", price3, " 到倒数第2个[", index2, "] ", price2);
               }
            }
+         else
+           {
+            Print("错误：倒数第2个和倒数第3个低点索引相同 [", index2, "], 跳过射线绘制");
+           }
         }
       else
         {
-         Print("低点底部射线跳过：只找到", validCount, "个有效低点（跳过最新），需要至少2个");
+         Print("低点底部射线跳过：只找到", validCount, "个有效且不重复的低点，需要至少3个");
         }
      }
   }
